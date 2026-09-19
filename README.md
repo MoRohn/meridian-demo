@@ -27,6 +27,19 @@ silently hopping to another port if it's already taken, prints a clean banner, a
 the URL in your browser automatically once the server is actually ready. (`npm run dev`
 still works too, if you'd rather run plain `next dev`.)
 
+### Evaluations (optional)
+
+The **Evaluate** buttons need the DeepEval service in [`eval-service/`](eval-service/). One time:
+
+```bash
+npm run eval-service:setup     # creates eval-service/.venv and installs its requirements
+```
+
+After that `npm run meridian` starts the service alongside the app (`MERIDIAN_EVAL=0` skips it), or run it on its
+own with `npm run eval-service`. The judge uses the OpenAI key you save in Settings, or `OPENAI_API_KEY` for the
+service (see [`eval-service/README.md`](eval-service/README.md)). Without the service the app works as before; the
+evaluation panel says the service isn't running and offers **Check again**.
+
 **No API key is required to use the app.** Without `TYPESAFE_API_KEY` set, every call
 transparently falls back to a local heuristic mock evaluator (see
 [`src/lib/typesafe/mock.ts`](src/lib/typesafe/mock.ts)) that reproduces the exact same
@@ -268,6 +281,10 @@ What makes the score trustworthy, and what does not:
 - **Reproducible.** The judge follows fixed, versioned steps, not steps it invents per call.
 - **Hardened against the document itself.** Contract text is sanitized, fenced as untrusted data,
   and scanned for prompt-injection attempts; a suspicious document produces a visible warning.
+- **Both backends, including the chat reply.** OpenAI gets a reply of its own: the same composer that builds
+  TypeSafe's reply (`src/lib/orchestrator/compose.ts`) runs on OpenAI's answers to the same questions, so the two
+  replies differ only where the models' judgments differ, and each is checked against its own judgments. (OpenAI's
+  reply quotes no flag probability, because it has only a self-reported confidence, not a calibrated probability.)
 - **Never the demo heuristic.** Without a live TypeSafe key, answers come from a local keyword
   heuristic. Those are not evaluated as if they were TypeSafe's; the panel says so.
 - **Measured, not assumed.** [`eval-service/golden/run_golden.py`](eval-service/golden/run_golden.py)
@@ -324,11 +341,11 @@ The eval service has its own suites: `pytest -q` in `eval-service/` covers valid
 monitoring with the judge stubbed, and `python golden/run_golden.py` scores the real judge against known-answer cases (see
 [`eval-service/README.md`](eval-service/README.md)).
 
-What's deliberately *not* covered here: React components and the API routes themselves —
-the components are thin rendering of already-tested data, and the routes are thin
-plumbing around already-tested functions (`handleTurn`, `verifyCitation`,
-`runOpenAIEquivalent`) plus one external HTTP call each. An end-to-end pass (Playwright
-against `npm run meridian`) would be the natural next layer for a real production build.
+What is not unit-tested: how React components render (there is no DOM test environment). That layer is covered
+instead by `npm run test:e2e` in a real browser, and the two API routes that carry real logic
+(`/api/evaluate`, `/api/compare-openai`) have their own tests with the external calls mocked. What no test here can
+cover is a live model: the local heuristic and stand-ins exercise the plumbing, and only a real key exercises the
+judge and the comparison with real OpenAI.
 
 ## Taking this to production
 

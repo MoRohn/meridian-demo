@@ -106,6 +106,15 @@ describe("buildReplyPacket", () => {
     expect(p.input).toContain("No governing law = FLAGGED");
     expect(p.actualOutput).toBe("66% overall risk");
   });
+  it("includes a flag's probability when the backend has one, so a reply that quotes it is grounded", () => {
+    const p = buildReplyPacket({ message: "m", reply: "r", risk: null, flags: [{ id: "missing_governing_law", label: "No governing law", flagged: true, probability: 0.85 }], sourceText: null })!;
+    expect(p.input).toContain("No governing law = FLAGGED (85%)");
+  });
+  it("leaves the probability out for a backend that has none (OpenAI's flags carry only a decision)", () => {
+    const p = buildReplyPacket({ message: "m", reply: "r", risk: null, flags: [{ id: "missing_governing_law", label: "No governing law", flagged: true }], sourceText: null })!;
+    expect(p.input).toMatch(/No governing law = FLAGGED$/m);
+    expect(p.input).not.toMatch(/FLAGGED \(/);
+  });
   it("returns null for an empty reply", () => {
     expect(buildReplyPacket({ message: "m", reply: "", risk: null, flags: [], sourceText: null })).toBeNull();
   });

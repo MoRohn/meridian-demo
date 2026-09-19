@@ -12,10 +12,12 @@ export function toEvalHealth(payload: unknown): EvalHealth {
   return p.judge_configured ? { status: "ready", ...base } : { status: "judge_not_configured", ...base };
 }
 
-export function describeHealth(h: EvalHealth): { tone: "ok" | "warn" | "off"; text: string } {
-  if (h.status === "offline") return { tone: "off", text: "Evaluation service offline. Start eval-service/ to enable evaluations." };
+export function describeHealth(h: EvalHealth, opts: { savedKey?: boolean } = {}): { tone: "ok" | "warn" | "off"; text: string } {
+  if (h.status === "offline") return { tone: "off", text: "The evaluation service isn't running. Start it with npm run eval-service (npm run meridian starts it for you)." };
   const detail = `${h.judgeModel} · pass at ${Math.round(h.threshold * 100)}%`;
+  // A key saved in Settings is sent with each evaluation and wins over the service's own, so it decides readiness.
+  if (opts.savedKey) return { tone: "ok", text: `Judge ready, using your saved OpenAI key · ${detail}` };
   return h.status === "ready"
     ? { tone: "ok", text: `Judge ready · ${detail}` }
-    : { tone: "warn", text: `Judge API key missing on the evaluation service · ${detail}` };
+    : { tone: "warn", text: `No judge API key. Save an OpenAI key in Settings, or set OPENAI_API_KEY for the service · ${detail}` };
 }

@@ -6,6 +6,7 @@ import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
 import { EvaluationPanel } from "./EvaluationPanel";
+import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
 import { buildCompliancePacket, type ComplianceDecision } from "@/lib/eval/packets";
 import { COMPLIANCE_CHECKS } from "@/lib/skills/complianceGuard";
 
@@ -132,6 +133,7 @@ function ExcerptComplianceSection({
           typesafeSource={typesafeSource}
           openaiPacket={buildCompliancePacket({ scope: "excerpt", decisions: openaiDecisions(excerptFlags, excerptOpenaiOutcome), sourceText: selectedExcerpt })}
           openaiConfigured={openaiConfigured}
+          openaiEmptyReason={openaiDecisions(excerptFlags, excerptOpenaiOutcome).length > 0 ? undefined : noOpenAIAnswerReason(excerptOpenaiOutcome, "the compliance checks")}
         />
       )}
     </div>
@@ -239,6 +241,7 @@ export function ComplianceFlags({
         typesafeSource={typesafeSource}
         openaiPacket={buildCompliancePacket({ scope: "document", decisions: openaiDecisions(flags, openaiOutcome), sourceText: documentText ?? null })}
         openaiConfigured={openaiConfigured}
+        openaiEmptyReason={openaiDecisions(flags, openaiOutcome).length > 0 ? undefined : noOpenAIAnswerReason(openaiOutcome, "the compliance checks")}
       />
     </div>
   );

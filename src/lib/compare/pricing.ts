@@ -40,8 +40,20 @@ export interface SessionTotals {
   openai: { calls: number; inputTokens: number; outputTokens: number; costUsd: number };
 }
 
+/**
+ * Money for a reader, one rule everywhere. API calls cost fractions of a cent, and the whole point of showing them is
+ * comparing backends, so small amounts are written out in full instead of being rounded away or put in scientific
+ * notation:
+ *   under $1      six decimals, always ($0.000065, $0.011624), so figures line up and none hides its magnitude
+ *   $1 and over   cents with thousands separators ($1.50, $1,234.50)
+ *   exactly zero  $0.00 (nothing was spent), never a run of zeros
+ * Anything below the sixth decimal reads as "<$0.000001" rather than a misleading $0.000000.
+ */
 export function fmtUsd(n: number): string {
-  if (n === 0) return "$0.00";
-  if (n < 0.0001) return `$${n.toExponential(2)}`;
-  return `$${n.toFixed(6)}`;
+  if (!(n > 0)) return "$0.00";
+  if (n < 0.000001) return "<$0.000001";
+  const cents = n >= 1 || Math.round(n * 1e6) >= 1e6;
+  return cents
+    ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `$${n.toFixed(6)}`;
 }

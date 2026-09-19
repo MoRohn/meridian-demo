@@ -55,6 +55,37 @@ for (const [name, [width, height]] of Object.entries(SIZES)) {
     check(m.hscroll <= 0, `${label}: no horizontal page scroll`, `${m.hscroll}px`);
     check(m.nav === mobile, `${label}: bottom nav ${mobile ? "shown" : "hidden"}`);
     if (width < 800) check(m.small.length === 0, `${label}: touch targets are at least 36px`, m.small.join(", "));
+    // Everything must be reachable: scrolled to its end, no pane's content may sit below the visible area
+    // (below the viewport, or below the bottom nav on small screens). Regression: the analysis panel used h-full next to the
+    // Context window bar and ran that bar's height past the bottom, clipping the end of every tab.
+    const reach = async (selector, what) => {
+      const r = await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el || el.getBoundingClientRect().height === 0) return null;
+        el.scrollTop = el.scrollHeight;
+        const nav = document.querySelector("nav[aria-label='Workspace sections']");
+        const limit = Math.min(window.innerHeight, nav && getComputedStyle(nav).display !== "none" ? nav.getBoundingClientRect().top : Infinity);
+        const paneBottom = el.getBoundingClientRect().bottom;
+        const lowest = Math.max(...[...el.querySelectorAll("*")].map((e) => e.getBoundingClientRect()).filter((b) => b.height > 0).map((b) => b.bottom), 0);
+        return { paneOver: Math.round(paneBottom - limit), contentOver: Math.round(lowest - limit) };
+      }, selector);
+      if (r) check(r.paneOver <= 1 && r.contentOver <= 1, `${label}: ${what} is fully reachable`, `pane ends ${r.paneOver}px and content ${r.contentOver}px past the visible area`);
+    };
+    if (!mobile || view === "Analysis") {
+      for (const tab of ["Trace", "Risk", "Compliance", "Citations"]) {
+        await page.getByRole("tab", { name: new RegExp(tab) }).click();
+        await page.waitForTimeout(250);
+        await reach("[role=tabpanel]", `${tab} tab`);
+      }
+      await page.getByRole("tab", { name: /Trace/ }).click();
+      await page.waitForTimeout(450); // let the panel's fade-in finish: axe reads mid-fade text as low contrast
+    }
+    if (!mobile || view === "Document") await reach("[aria-label='Document preview']", "document preview");
+    if (!mobile || view === "Assistant") {
+      await reach("[role=log]", "chat history");
+      const input = await page.evaluate(() => { const i = document.querySelector("form input"); const nav = document.querySelector("nav[aria-label='Workspace sections']"); const limit = Math.min(innerHeight, nav && getComputedStyle(nav).display !== "none" ? nav.getBoundingClientRect().top : Infinity); return i ? Math.round(i.getBoundingClientRect().bottom - limit) : null; });
+      if (input !== null) check(input <= 1, `${label}: chat input is on screen`, `${input}px past the visible area`);
+    }
     await page.evaluate(axeSource);
     const violations = await page.evaluate(async () => (await window.axe.run(document, { resultTypes: ["violations"] })).violations.map((v) => `${v.impact}:${v.id}`));
     check(violations.length === 0, `${label}: no accessibility violations`, violations.join(", "));

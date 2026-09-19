@@ -11,6 +11,7 @@ import os
 
 from deepeval.metrics import GEval
 from deepeval.metrics.g_eval import Rubric as ScoreBand
+from deepeval.models import OpenAIModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
 
 import guard
@@ -44,19 +45,24 @@ def prepare_case(rubric: Rubric, request: str, answer: str, source: str | None) 
     return LLMTestCase(input=judge_input, actual_output=guard.fence("ANSWER", cleaned["ANSWER"], nonce)), integrity
 
 
-def build_metric(rubric: Rubric, backend: str, model: str, threshold: float) -> GEval:
+def build_metric(rubric: Rubric, backend: str, model: str, threshold: float, api_key: str | None = None) -> GEval:
     """
     Fixed evaluation_steps (reproducible) plus a rubric of non-overlapping score bands, both of
     which DeepEval documents as the way to make G-Eval more consistent across runs. The bands shape the judge's
     choice (they are in its prompt); they do not confine the averaged score, which is why TOP_LOGPROBS defaults to 1. Only INPUT and
     ACTUAL_OUTPUT are evaluation params because the steps only refer to those two fields.
+
+    `api_key` is a key that arrived with one request. It goes into a model object owned by this one metric and is never
+    written to the environment, so concurrent requests with different keys cannot see each other's. Temperature is pinned
+    to 0 to match the default model path.
     """
+    judge_model = OpenAIModel(model=model, api_key=api_key, temperature=0) if api_key else model
     return GEval(
         name=f"{rubric.title} ({backend})",
         evaluation_steps=list(rubric.steps),
         rubric=[ScoreBand(score_range=(lo, hi), expected_outcome=outcome) for lo, hi, outcome in rubric.bands],
         evaluation_params=[SingleTurnParams.INPUT, SingleTurnParams.ACTUAL_OUTPUT],
-        model=model,
+        model=judge_model,
         threshold=threshold,
         top_logprobs=TOP_LOGPROBS,
         async_mode=False,

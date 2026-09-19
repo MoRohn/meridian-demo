@@ -5,6 +5,9 @@ import { runEvaluation } from "@/lib/eval/client";
 import { EVAL_KINDS } from "@/lib/eval/kinds";
 import { describeHealth } from "@/lib/eval/health";
 import { describeIntegrity } from "@/lib/eval/integrity";
+import { savedJudgeKey } from "@/lib/eval/client";
+import { renderBold } from "@/lib/renderBold";
+import { formatElapsed } from "@/lib/useElapsedTimer";
 import { useEvalHealth } from "@/lib/eval/useEvalHealth";
 import { JUDGE_FAILURE_TITLES } from "@/lib/eval/serviceError";
 import type { EvalPacket } from "@/lib/eval/packets";
@@ -104,7 +107,7 @@ function ResultCard({ name, result, packet }: { name: string; result: EvalResult
           <div className="absolute -top-0.5 h-2.5 w-0.5 rounded bg-deep/60" style={{ left: `${result.threshold * 100}%` }} aria-hidden />
         </div>
         <p className="mt-1.5 text-xs text-muted">
-          {result.judgeModel} · rubric {result.rubric.id} v{result.rubric.version} · {(result.latencyMs / 1000).toFixed(1)}s
+          {result.judgeModel} · rubric {result.rubric.id} v{result.rubric.version} · {formatElapsed(result.latencyMs)}
         </p>
       </div>
 
@@ -122,7 +125,7 @@ function ResultCard({ name, result, packet }: { name: string; result: EvalResult
           <p className="mb-1 font-bold text-deep">Request</p>
           <pre className="mb-2 whitespace-pre-wrap font-sans">{packet.input}</pre>
           <p className="mb-1 font-bold text-deep">Answer under evaluation</p>
-          <pre className="mb-2 whitespace-pre-wrap font-sans">{packet.actualOutput}</pre>
+          <pre className="mb-2 whitespace-pre-wrap font-sans">{renderBold(packet.actualOutput)}</pre>
           <p className="font-bold text-deep">Source text</p>
           <p>{packet.context ? `${packet.context.length.toLocaleString()} characters, passed as fenced, untrusted data.` : "None."}</p>
         </Disclosure>
@@ -152,6 +155,8 @@ interface Side {
   name: string;
   backend: Backend;
   packet: EvalPacket | null;
+  /** Why there is no packet when it will never arrive (a failed or incomplete call); otherwise the answer is just pending. */
+  emptyReason?: string;
   /** Set when this side must not be evaluated, with the reader-facing reason. */
   skipReason: string | null;
 }
@@ -162,7 +167,7 @@ interface Stored {
   pending: boolean;
 }
 
-function SideCard({ side, stored, sig }: { side: Side; stored: Stored | undefined; sig: string }) {
+function SideCard({ side, stored, sig, serviceDown }: { side: Side; stored: Stored | undefined; sig: string; serviceDown: boolean }) {
   if (side.skipReason) {
     return (
       <StatusCard name={side.name} icon="info" tone="neutral" title="Not evaluated">
@@ -173,7 +178,15 @@ function SideCard({ side, stored, sig }: { side: Side; stored: Stored | undefine
   if (!side.packet) {
     return (
       <StatusCard name={side.name} icon="info" tone="neutral" title="Nothing to evaluate">
-        No answer from this backend yet.
+        {side.emptyReason ?? "No answer from this backend yet."}
+      </StatusCard>
+    );
+  }
+  // The service being down is said once, in the status line above, with the command to fix it. The cards stay calm.
+  if (serviceDown) {
+    return (
+      <StatusCard name={side.name} icon="info" tone="neutral" title="Waiting for the evaluation service">
+        This answer will be evaluated once the service is running.
       </StatusCard>
     );
   }
@@ -195,7 +208,7 @@ function SideCard({ side, stored, sig }: { side: Side; stored: Stored | undefine
   const { outcome } = current;
   if (!outcome.ok) {
     return outcome.reason === "not_configured" ? (
-      <StatusCard name={side.name} icon="alert" tone="warn" title="Evaluation service unavailable">
+      <StatusCard name={side.name} icon="alert" tone="warn" title="Judge not configured">
         {outcome.message ?? "The evaluation service isn't configured."}
       </StatusCard>
     ) : (
@@ -224,6 +237,7 @@ export function EvaluationPanel({
   typesafeSource,
   openaiPacket,
   openaiConfigured,
+  openaiEmptyReason,
 }: {
   kind: EvalKind;
   typesafePacket: EvalPacket | null;
@@ -231,11 +245,13 @@ export function EvaluationPanel({
   typesafeSource: "live" | "mock" | null;
   openaiPacket: EvalPacket | null;
   openaiConfigured: boolean;
+  /** When OpenAI has no answer to evaluate and never will (its call failed, or came back incomplete), why. */
+  openaiEmptyReason?: string;
 }) {
   const [stored, setStored] = useState<Partial<Record<Backend, Stored>>>({});
   const copy = EVAL_KINDS[kind];
   const { health, refresh } = useEvalHealth();
-  const status = health ? describeHealth(health) : null;
+  const status = health ? describeHealth(health, { savedKey: Boolean(savedJudgeKey()) }) : null;
 
   const sides: Side[] = [
     {
@@ -251,15 +267,31 @@ export function EvaluationPanel({
       name: "OpenAI",
       backend: "openai",
       packet: openaiPacket,
+      emptyReason: openaiEmptyReason,
       skipReason: openaiConfigured ? null : "OpenAI isn't configured, so there is no OpenAI answer to evaluate.",
     },
   ];
   const sigOf = (s: Side) => (s.packet ? JSON.stringify([s.packet.input, s.packet.actualOutput, s.packet.context?.length ?? 0]) : "");
   const runnable = sides.filter((s) => s.packet && !s.skipReason);
   const anyPending = sides.some((s) => stored[s.backend]?.pending);
-  const hasRun = sides.some((s) => stored[s.backend]?.outcome);
+  const outcomes = sides.map((s) => stored[s.backend]?.outcome).filter((o): o is EvalOutcome => Boolean(o));
+  const hasResult = outcomes.some((o) => o.ok);
+  const lastRunOffline = outcomes.some((o) => !o.ok && o.code === "service_offline");
+
+  // One reading of the situation, so the button, the status line and the cards can never disagree.
+  const hasSavedKey = Boolean(savedJudgeKey());
+  const serviceDown = health?.status === "offline" || lastRunOffline;
+  const keyMissing = health?.status === "judge_not_configured" && !hasSavedKey;
+  const buttonLabel = serviceDown ? "Check again" : hasResult ? "Re-evaluate" : outcomes.length > 0 ? "Try again" : "Evaluate";
+  const statusText = lastRunOffline && health?.status !== "offline" ? describeHealth({ status: "offline" }).text : status?.text;
 
   function run() {
+    if (serviceDown) {
+      // Nothing to send while it is down: look again, and clear the stale failure so the status can recover.
+      setStored({});
+      refresh();
+      return;
+    }
     for (const side of runnable) {
       const sig = sigOf(side);
       const packet = side.packet!;
@@ -284,15 +316,23 @@ export function EvaluationPanel({
           </h2>
           <p className="mt-1 text-xs leading-relaxed text-muted">{copy.subtitle}</p>
         </div>
-        {runnable.length > 0 && <RerunButton onClick={run} pending={anyPending} label={hasRun ? "Re-evaluate" : "Evaluate"} />}
+        {runnable.length > 0 && (
+          <RerunButton
+            onClick={run}
+            pending={anyPending}
+            label={buttonLabel}
+            disabled={keyMissing}
+            title={keyMissing ? "Save an OpenAI key in Settings, or set OPENAI_API_KEY for the evaluation service" : undefined}
+          />
+        )}
       </div>
       {status && (
         <p role="status" className="flex items-center gap-2 text-xs font-semibold text-secondary">
           <span
             aria-hidden
-            className={`h-2 w-2 shrink-0 rounded-full ${status.tone === "ok" ? "bg-emerald-600" : status.tone === "warn" ? "bg-amber-600" : "bg-rose-600"}`}
+            className={`h-2 w-2 shrink-0 rounded-full ${serviceDown ? "bg-rose-600" : status.tone === "ok" ? "bg-emerald-600" : status.tone === "warn" ? "bg-amber-600" : "bg-rose-600"}`}
           />
-          {status.text}
+          {statusText}
         </p>
       )}
       <p className="text-xs text-muted">
@@ -300,7 +340,7 @@ export function EvaluationPanel({
       </p>
       <div className="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
         {sides.map((side) => (
-          <SideCard key={side.backend} side={side} stored={stored[side.backend]} sig={sigOf(side)} />
+          <SideCard key={side.backend} side={side} stored={stored[side.backend]} sig={sigOf(side)} serviceDown={serviceDown} />
         ))}
       </div>
     </section>

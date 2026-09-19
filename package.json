@@ -10,7 +10,9 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "node e2e/smoke.mjs"
+    "test:e2e": "node e2e/smoke.mjs",
+    "eval-service": "node scripts/eval-service.mjs start",
+    "eval-service:setup": "node scripts/eval-service.mjs setup"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0",

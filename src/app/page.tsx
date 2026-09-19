@@ -15,7 +15,7 @@ import type { TraceEntry, ComplianceFlag, ContextStats } from "@/lib/orchestrato
 import { ContextMeter, type BackendContextMetrics } from "@/components/ContextMeter";
 import type { CompositeRisk } from "@/lib/skills/clauseRisk";
 import type { CitationCheckResult } from "@/lib/skills/citationVerifier";
-import type { OpenAIRunOutcome } from "@/lib/openai/types";
+import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
 import { CONTRACT_TYPES } from "@/lib/skills/contractType";
 import { TYPESAFE_PRICING, usdForTokens, type SessionTotals } from "@/lib/compare/pricing";
 import { matchReferencePrice } from "@/lib/compare/openaiEquivalent";
@@ -85,6 +85,8 @@ export default function Home() {
   const [openaiMetrics, setOpenaiMetrics] = useState<BackendContextMetrics | null>(null);
 
   const [openaiOutcome, setOpenaiOutcome] = useState<OpenAIRunOutcome | null>(null);
+  /** The reply Meridian composed from OpenAI's answers to the latest chat turn, so OpenAI's reply can be evaluated like TypeSafe's. */
+  const [openaiTurn, setOpenaiTurn] = useState<OpenAITurn | null>(null);
   const [openaiConfigured, setOpenaiConfigured] = useState(false);
 
   // Highlighted-excerpt analysis — scoped separately from the whole-document
@@ -212,6 +214,7 @@ export default function Home() {
   async function handleSend(text: string, scope: "all" | "risk" | "compliance" = "all") {
     setMessages((m) => [...m, { role: "user", text }]);
     setLastMessage(text);
+    setOpenaiTurn(null); // never pair a new TypeSafe reply with OpenAI's reply to the previous message
     setSending(true);
     const tsEpoch = beginTypesafeActivity();
     const oaEpoch = openaiConfigured ? beginOpenaiActivity() : null;
@@ -286,9 +289,10 @@ export default function Home() {
             body: JSON.stringify({ sessionId, message: text, override: oaOverride }),
           })
             .then((r) => r.json())
-            .then((data: { outcome: OpenAIRunOutcome }) => {
+            .then((data: { outcome: OpenAIRunOutcome; turn?: OpenAITurn | null }) => {
               const outcome = data.outcome;
               setOpenaiOutcome(outcome);
+              setOpenaiTurn(data.turn ?? null);
               const status = outcome?.ok || outcome?.reason === "not_configured" ? "done" : "error";
               finishOpenaiActivity(oaEpoch, { status, elapsedMs: outcome?.ok ? outcome.result.elapsedMs : null });
               if (outcome?.ok) {
@@ -525,6 +529,7 @@ export default function Home() {
       setRisk(null);
       setComplianceFlags([]);
       setOpenaiOutcome(null);
+      setOpenaiTurn(null);
       setLastMessage(null);
       setLastReply(null);
       setContextStats(null);
@@ -606,7 +611,7 @@ export default function Home() {
 
   const contextBar = (
     <section aria-label="Session context" className="flex min-w-0 items-center gap-x-3 gap-y-1.5 border-b border-border bg-surface px-4 py-2 text-sm short:hidden sm:gap-x-5 sm:py-2.5">
-      <span className="hidden shrink-0 font-bold uppercase tracking-wide text-muted sm:inline">Context memory</span>
+      <span className="hidden shrink-0 font-bold uppercase tracking-wide text-muted xl:inline">Context memory</span>
       <ContextFact label="doc" value={activeDocument ? activeDocument.name : "none loaded"} grow />
       <span className="hidden min-w-0 sm:flex">
         <ContextFact label="type" value={contractTypeLabel ?? "not yet classified"} />
@@ -683,6 +688,7 @@ export default function Home() {
                     lastReply={lastReply}
                     documentText={activeDocument?.text}
                     judgments={lastJudgments}
+                    openaiTurn={openaiTurn}
                   />
                 ),
                 risk: (
@@ -747,7 +753,7 @@ function ContextFact({ label, value, grow }: { label: string; value: string; gro
       <span className="shrink-0 text-muted">{label}:</span>
       <span
         title={value}
-        className={`truncate font-bold text-foreground ${grow ? "max-w-[8rem] sm:max-w-[14rem] md:max-w-[22rem]" : "max-w-[8rem]"}`}
+        className={`truncate font-bold text-foreground ${grow ? "max-w-[8rem] sm:max-w-[14rem] md:max-w-[22rem]" : "max-w-[11rem] sm:max-w-[16rem] lg:max-w-[30rem]"}`}
       >
         {value}
       </span>

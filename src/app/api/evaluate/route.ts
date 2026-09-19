@@ -3,6 +3,7 @@ import { EVAL_KIND_IDS } from "@/lib/eval/kinds";
 import { describeServiceError, parseJudgeFailure } from "@/lib/eval/serviceError";
 import { toEvalHealth, type EvalHealth } from "@/lib/eval/health";
 import { evalLogLine } from "@/lib/eval/log";
+import { isPlausibleKey, isSafeKeyTransport, redactKey } from "@/lib/eval/transport";
 import type { EvalOutcome, EvalRequest, EvalResult } from "@/lib/eval/types";
 
 export const runtime = "nodejs";
@@ -45,6 +46,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "kind, backend, input, and actualOutput are required" }, { status: 400 });
   }
 
+  // A key saved in Settings is used for the judge on this request only. It goes to the service in a header (never the
+  // body), only over a safe transport, and is never logged or stored here.
+  const savedKey = body.override?.apiKey;
+  const canSendKey = isPlausibleKey(savedKey) && isSafeKeyTransport(EVAL_SERVICE_URL);
+  const keyWithheld = isPlausibleKey(savedKey) && !canSendKey;
+
   const started = Date.now();
   const respond = (outcome: EvalOutcome) => {
     console.info(evalLogLine({ kind: body.kind, backend: body.backend, outcome, ms: Date.now() - started }));
@@ -54,7 +61,7 @@ export async function POST(req: NextRequest) {
   try {
     const res = await fetch(`${EVAL_SERVICE_URL}/evaluate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(canSendKey ? { "X-Judge-Api-Key": savedKey } : {}) },
       body: JSON.stringify({
         kind: body.kind,
         backend: body.backend,
@@ -71,7 +78,8 @@ export async function POST(req: NextRequest) {
       // 503 is specifically "the service is up but its own judge model isn't
       // configured" that's a not_configured state, not a real failure.
       const reason = res.status === 503 ? "not_configured" : "error";
-      const failure = parseJudgeFailure(message);
+      const hint = keyWithheld && res.status === 503 ? " Your saved OpenAI key was not sent because the evaluation service address is neither https nor local; use https, or set OPENAI_API_KEY on the service." : "";
+      const failure = parseJudgeFailure(message + hint);
       const outcome: EvalOutcome = { ok: false, reason, message: failure.message, ...(failure.code ? { code: failure.code } : {}) };
       return respond(outcome);
     }
@@ -107,11 +115,10 @@ export async function POST(req: NextRequest) {
     }
     // Most common case in dev: nobody has started the eval service
     // Opt-in piece of infra, not a hard dependency of the app.
-    const outcome: EvalOutcome = {
-      ok: false,
-      reason: "not_configured",
-      message: `Eval service unreachable at ${EVAL_SERVICE_URL} (${(err as Error).message}). See eval-service/README.md to start it.`,
-    };
+    // The address and the low-level error are for whoever runs the server, not the reader: they go to the server log
+    // (with the key redacted), and the browser gets a plain sentence with a stable code.
+    console.warn(`[api/evaluate] eval service unreachable at ${EVAL_SERVICE_URL}: ${redactKey((err as Error).message, savedKey)}`);
+    const outcome: EvalOutcome = { ok: false, reason: "not_configured", code: "service_offline", message: "The evaluation service isn't running." };
     return respond(outcome);
   }
 }

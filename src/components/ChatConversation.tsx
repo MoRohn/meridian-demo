@@ -2,17 +2,11 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { PillButton } from "./PillButton";
+import { renderBold } from "@/lib/renderBold";
 
 export interface ChatMessage {
   role: "user" | "assistant";
   text: string;
-}
-
-/** Assistant replies are composed from templates that use `**bold**`; render it instead of showing the asterisks. */
-function renderBold(text: string) {
-  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? <strong key={i}>{part.slice(2, -2)}</strong> : part,
-  );
 }
 
 /**

@@ -29,8 +29,10 @@ export function Workspace({
   onChange: (tab: WorkspaceTab) => void;
   tabs: Record<WorkspaceTab, ReactNode>;
 }) {
+  // flex-1, not h-full: this shares a column with the Context window bar, and h-full (100% of the column) made the panel
+  // taller than the space left, clipping the bottom of every tab by exactly that bar's height.
   return (
-    <div className="flex h-full min-w-0 flex-col bg-elevated">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-elevated">
       <div role="tablist" aria-label="Analysis views" className="flex min-w-0 gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-2">
         {TABS.map((t) => {
           const isActive = active === t.id;
@@ -50,7 +52,7 @@ export function Workspace({
           );
         })}
       </div>
-      <div key={active} tabIndex={0} role="tabpanel" aria-label={`${active} results`} className="@container animate-in flex-1 overflow-y-auto p-3 pb-8 sm:p-4">
+      <div key={active} tabIndex={0} role="tabpanel" aria-label={`${active} results`} className="@container animate-in flex-1 overflow-y-auto p-3 pb-12 sm:p-4 sm:pb-12">
         {tabs[active]}
       </div>
     </div>

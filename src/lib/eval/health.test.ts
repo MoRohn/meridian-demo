@@ -23,7 +23,18 @@ describe("describeHealth", () => {
   it("words each state for the reader", () => {
     expect(describeHealth(toEvalHealth(OK))).toEqual({ tone: "ok", text: "Judge ready · gpt-4o-mini · pass at 60%" });
     expect(describeHealth(toEvalHealth({ ...OK, judge_configured: false })).tone).toBe("warn");
-    expect(describeHealth({ status: "offline" }).text).toContain("eval-service/");
+    expect(describeHealth({ status: "offline" }).text).toContain("npm run eval-service");
+    expect(describeHealth(toEvalHealth({ ...OK, judge_configured: false })).text).toContain("Save an OpenAI key in Settings");
+  });
+});
+
+describe("describeHealth with a key saved in Settings", () => {
+  it("is ready even when the service has no key of its own, and says whose key is used", () => {
+    const noKey = toEvalHealth({ ...OK, judge_configured: false });
+    expect(describeHealth(noKey, { savedKey: true })).toEqual({ tone: "ok", text: "Judge ready, using your saved OpenAI key · gpt-4o-mini · pass at 60%" });
+  });
+  it("cannot be rescued by a saved key when the service itself is offline", () => {
+    expect(describeHealth({ status: "offline" }, { savedKey: true }).tone).toBe("off");
   });
 });
 

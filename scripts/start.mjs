@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import dns from "node:dns/promises";
+import { isPortFree as isServicePortFree, isSetUp as evalServiceIsSetUp, SERVICE_PORT, startEvalService } from "./eval-service.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const PREFERRED_HOST = process.env.HOST || "meridian.local";
@@ -100,6 +101,22 @@ async function main() {
     shell: process.platform === "win32",
   });
 
+  // The evaluation service is optional infrastructure, but the Evaluate buttons need it, so start it alongside the app
+  // when it has been set up. MERIDIAN_EVAL=0 skips this; a remote EVAL_SERVICE_URL means it is not ours to start.
+  let evalChild = null;
+  const remoteEval = process.env.EVAL_SERVICE_URL && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(process.env.EVAL_SERVICE_URL);
+  if (process.env.MERIDIAN_EVAL !== "0" && !remoteEval) {
+    if (!evalServiceIsSetUp()) {
+      console.log("  Evaluations are off: the evaluation service isn't installed. To enable them, run once:");
+      console.log("    npm run eval-service:setup\n");
+    } else if (!(await isServicePortFree(SERVICE_PORT))) {
+      console.log(`  Evaluation service: already running on port ${SERVICE_PORT}.\n`);
+    } else {
+      evalChild = startEvalService({ output: "prefixed" });
+      console.log(`  Evaluation service: starting on port ${SERVICE_PORT}.\n`);
+    }
+  }
+
   waitUntilReady(url).then((ready) => {
     if (ready) {
       console.log("");
@@ -109,9 +126,16 @@ async function main() {
     }
   });
 
-  child.on("exit", (code) => process.exit(code ?? 0));
-  process.on("SIGINT", () => child.kill("SIGINT"));
-  process.on("SIGTERM", () => child.kill("SIGTERM"));
+  const stopAll = (signal) => {
+    evalChild?.kill(signal);
+    child.kill(signal);
+  };
+  child.on("exit", (code) => {
+    evalChild?.kill("SIGTERM");
+    process.exit(code ?? 0);
+  });
+  process.on("SIGINT", () => stopAll("SIGINT"));
+  process.on("SIGTERM", () => stopAll("SIGTERM"));
 }
 
 main();

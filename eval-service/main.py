@@ -32,6 +32,7 @@ Run locally:
 import logging
 import math
 import os
+import re
 import threading
 import time
 from typing import Literal
@@ -40,7 +41,7 @@ from typing import Literal
 # default; switch it off before the library is imported.
 os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "1")  # the value DeepEval documents
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
+from fastapi import FastAPI, Header, HTTPException  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
@@ -54,6 +55,7 @@ from rubrics import RUBRICS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("meridian.eval")
+judge_errors.install_log_redaction()
 
 app = FastAPI(title="Meridian Eval Service", version="0.2.0")
 
@@ -173,24 +175,32 @@ def rubrics():
 # ---- evaluation -----------------------------------------------------------
 
 
+# A key that arrives with a request is used for that one call only: never stored, logged, or returned.
+_KEY_FORMAT = re.compile(r"^[\x21-\x7e]{16,300}$")  # printable ASCII, no whitespace
+
+
 @app.post("/evaluate", response_model=EvaluateResponse)
-def evaluate(req: EvaluateRequest):
-    if not os.environ.get("OPENAI_API_KEY"):
+def evaluate(req: EvaluateRequest, x_judge_api_key: str | None = Header(default=None)):
+    request_key = (x_judge_api_key or "").strip() or None
+    if request_key and not _KEY_FORMAT.match(request_key):
+        raise HTTPException(status_code=400, detail="The judge API key sent with this request is not in a valid format.")
+    if not request_key and not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(
             status_code=503,
-            detail="OPENAI_API_KEY is not set for the eval service — G-Eval needs a judge model to call.",
+            detail="No judge API key: set OPENAI_API_KEY for the eval service, or save an OpenAI key in Meridian's Settings.",
         )
 
     rubric = RUBRICS[req.kind]
     test_case, integrity = judge.prepare_case(rubric, req.input, req.actual_output, req.context)
-    metric = judge.build_metric(rubric, req.backend, JUDGE_MODEL, PASS_THRESHOLD)
+    metric = judge.build_metric(rubric, req.backend, JUDGE_MODEL, PASS_THRESHOLD, api_key=request_key)
 
     started = time.perf_counter()
     try:
-        metric.measure(test_case)
+        with judge_errors.holding(request_key):
+            metric.measure(test_case)
     except Exception as exc:  # noqa: BLE001 - every judge failure is reported, with a stable code
         latency = int((time.perf_counter() - started) * 1000)
-        code, message = judge_errors.explain(exc)
+        code, message = judge_errors.explain(exc, secrets=(request_key,) if request_key else ())
         _record(req.kind, False, latency, error=code)
         log.warning(
             "eval_failed kind=%s backend=%s judge=%s latency_ms=%d error=%s exc=%s",

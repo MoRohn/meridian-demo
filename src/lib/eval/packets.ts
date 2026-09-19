@@ -143,7 +143,8 @@ export function buildReplyPacket(args: {
   message: string;
   reply: string;
   risk: { overall: number; ratings: RiskRating[] } | null;
-  flags: (ComplianceDecision & { label: string })[];
+  /** `probability` is included when the backend has one (TypeSafe's calibrated figure), so a reply that quotes it can be checked. */
+  flags: (ComplianceDecision & { label: string; probability?: number })[];
   sourceText: string | null;
 }): EvalPacket | null {
   const { message, reply, risk, flags, sourceText } = args;
@@ -154,7 +155,9 @@ export function buildReplyPacket(args: {
     judgments.push(`- Composite risk: ${pct(risk.overall)} (${RISK_BAND_LABELS[riskBand(risk.overall)]}); ${parts}`);
   }
   if (flags.length > 0) {
-    judgments.push(`- Compliance: ${flags.map((f) => `${f.label} = ${f.flagged ? "FLAGGED" : "clear"}`).join("; ")}`);
+    judgments.push(
+      `- Compliance: ${flags.map((f) => `${f.label} = ${f.flagged ? "FLAGGED" : "clear"}${f.probability != null ? ` (${pct(f.probability)})` : ""}`).join("; ")}`,
+    );
   }
   return {
     kind: "reply",

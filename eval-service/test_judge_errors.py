@@ -93,3 +93,42 @@ def test_every_failure_code_the_service_can_emit_has_a_title_in_the_ui():
     ts = (Path(__file__).parent.parent / "src" / "lib" / "eval" / "serviceError.ts").read_text()
     codes = {code for code, _ in judge_errors.MESSAGES.values()} | {"judge_bad_output", "judge_bad_score"}
     assert [c for c in sorted(codes) if f"{c}:" not in ts] == []
+
+
+# ---- request-key redaction machinery ---------------------------------------------------------
+
+
+def test_a_key_in_flight_is_masked_only_while_its_request_is_being_served():
+    key = "plainhexkeywithoutaprefix0123456789"
+    assert judge_errors.redact(f"failed: {key}") == f"failed: {key}"  # not key-shaped and not in flight: untouched
+    with judge_errors.holding(key):
+        assert key not in judge_errors.redact(f"failed: {key}")
+    assert judge_errors.redact(f"failed: {key}") == f"failed: {key}"
+
+
+def test_two_concurrent_requests_with_the_same_key_keep_it_masked_until_both_finish():
+    key = "sharedkey_0123456789abcdef"
+    with judge_errors.holding(key):
+        with judge_errors.holding(key):
+            pass
+        assert key not in judge_errors.redact(key), "the outer request is still in flight"
+    assert key in judge_errors.redact(key)
+
+
+def test_log_redaction_covers_records_from_any_logger_including_formatted_args(caplog):
+    import logging
+    judge_errors.install_log_redaction()
+    judge_errors.install_log_redaction()  # idempotent
+    with caplog.at_level(logging.INFO):
+        with judge_errors.holding("customkey_ABCDEFGH12345678"):
+            logging.getLogger("some.third.party").info("retrying after %s", "Error: customkey_ABCDEFGH12345678 rejected")
+            logging.getLogger("other").warning("Authorization: Bearer sk-abc123def456ghi789")
+        logging.getLogger("other").info("ordinary line with %d%% of the text intact", 100)
+    assert "customkey_ABCDEFGH12345678" not in caplog.text and "sk-abc123def456ghi789" not in caplog.text
+    assert "ordinary line with 100% of the text intact" in caplog.text
+
+
+def test_a_logging_call_with_bad_format_arguments_does_not_crash_the_service():
+    import logging
+    judge_errors.install_log_redaction()
+    logging.getLogger("x").info("needs %d but got %s", "not-a-number", None)  # logging swallows format errors; ours must too

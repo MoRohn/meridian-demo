@@ -21,6 +21,7 @@ export const JUDGE_FAILURE_TITLES: Record<string, string> = {
   judge_provider_error: "Judge provider error",
   judge_bad_output: "Judge answer unreadable",
   judge_bad_score: "Judge score invalid",
+  service_offline: "Evaluation service not running",
 };
 
 export function describeServiceError(detail: unknown, fallback: string): string {

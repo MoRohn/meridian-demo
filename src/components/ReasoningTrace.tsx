@@ -1,5 +1,5 @@
 import type { TraceEntry } from "@/lib/orchestrator/run";
-import type { OpenAIRunOutcome } from "@/lib/openai/types";
+import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
 import type { SessionTotals } from "@/lib/compare/pricing";
 import { fmtUsd } from "@/lib/compare/pricing";
 import { agrees, agreementSummary, openaiAnswerFor, typesafeSummary } from "@/lib/compare/agreement";
@@ -8,6 +8,8 @@ import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar } from "./EvalSummaryBar";
 import { Icon } from "./Icon";
+import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
+import { questionLabel } from "@/lib/trace/labels";
 import { EvaluationPanel } from "./EvaluationPanel";
 import { buildReplyPacket } from "@/lib/eval/packets";
 import type { ComplianceFlag } from "@/lib/orchestrator/run";
@@ -33,6 +35,7 @@ export function ReasoningTrace({
   lastReply,
   documentText,
   judgments,
+  openaiTurn,
 }: {
   trace: TraceEntry[];
   source: "live" | "mock";
@@ -42,12 +45,14 @@ export function ReasoningTrace({
   /** Re-sends the last chat message to refresh this trace. Omitted (no button shown) until at least one message has been sent. */
   onRerun?: () => void;
   rerunPending?: boolean;
-  /** The user message and composed reply behind the trace currently shown — evaluated by DeepEval below. OpenAI has no equivalent composed reply in this architecture (it only answers the structured questions), so only TypeSafe's side is judged here. */
+  /** The user message and TypeSafe's composed reply behind the trace currently shown; OpenAI's counterpart arrives as `openaiTurn`. Both are evaluated by DeepEval below. */
   lastMessage?: string | null;
   lastReply?: string | null;
   documentText?: string | null;
   /** The risk and compliance judgments the reply was composed from, checked against the reply by the judge. */
   judgments?: { risk: CompositeRisk | null; flags: ComplianceFlag[] } | null;
+  /** The reply composed from OpenAI's answers by the same pipeline; evaluated alongside TypeSafe's. */
+  openaiTurn?: OpenAITurn | null;
 }) {
   if (trace.length === 0) {
     return (
@@ -125,8 +130,22 @@ export function ReasoningTrace({
             sourceText: documentText ?? null,
           })}
           typesafeSource={source}
-          openaiPacket={null}
+          openaiPacket={
+            openaiTurn
+              ? buildReplyPacket({
+                  message: lastMessage ?? "",
+                  reply: openaiTurn.reply,
+                  risk: openaiTurn.risk
+                    ? { overall: openaiTurn.risk.overall, ratings: openaiTurn.risk.perDimension.map((d) => ({ id: d.id, normalized: d.normalized })) }
+                    : null,
+                  flags: openaiTurn.complianceFlags.map((f) => ({ id: f.id, label: f.label, flagged: f.flagged })),
+                  sourceText: documentText ?? null,
+                })
+              : null
+          }
           openaiConfigured={openaiConfigured}
+          // The reply is cleared when a turn starts while the previous outcome lingers, so only a failed call is a reason to show.
+          openaiEmptyReason={openaiTurn || openaiOutcome?.ok !== false ? undefined : noOpenAIAnswerReason(openaiOutcome, "a usable set of answers")}
         />
       )}
 
@@ -174,11 +193,14 @@ function TraceCard({
       }`}
     >
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-xs font-medium text-secondary">
             {SKILL_LABELS[entry.skill] ?? entry.skill}
           </span>
-          <code className="truncate text-sm text-muted">{entry.questionId}</code>
+          <span className="min-w-0 text-sm font-bold text-foreground">{questionLabel(entry.questionId)}</span>
+          <code className="break-all text-xs text-muted" title="The question id sent to the model">
+            {entry.questionId}
+          </code>
         </div>
       </div>
 

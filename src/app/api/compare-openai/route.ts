@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOrCreateSession } from "@/lib/memory/session";
 import { buildTurnRequest } from "@/lib/orchestrator/run";
 import { runOpenAIEquivalent, isOpenAIConfigured } from "@/lib/openai/client";
+import { openaiAnswersToTyped } from "@/lib/openai/answers";
+import { composeTurn } from "@/lib/orchestrator/compose";
+import type { OpenAITurn } from "@/lib/openai/types";
 import type { KeyOverride } from "@/lib/typesafe/client";
 
 export const runtime = "nodejs";
@@ -23,11 +26,23 @@ export async function POST(req: NextRequest) {
     }
 
     const session = getOrCreateSession(body.sessionId);
+    // Snapshot BEFORE awaiting: the chat request races this one and appends to the history when it finishes, and this
+    // reply must be composed from the same session state the questions were built from.
+    const snapshot = { ...session, history: [...session.history], contextFacts: { ...session.contextFacts } };
     const { stateJson, questions } = buildTurnRequest(session, body.message.trim());
     const outcome = await runOpenAIEquivalent(stateJson, questions, body.override);
 
+    // OpenAI gets a reply of its own: composed by the same pipeline as TypeSafe's, from OpenAI's answers. It quotes no
+    // flag probability, because OpenAI has only a self-reported confidence and no calibrated probability to cite.
+    let turn: OpenAITurn | null = null;
+    if (outcome.ok) {
+      const composed = composeTurn(snapshot, openaiAnswersToTyped(outcome.result.answers, questions), { citeFlagProbability: false });
+      turn = { reply: composed.reply, intent: composed.intent, risk: composed.risk, complianceFlags: composed.complianceFlags, blocked: composed.blocked };
+    }
+
     return NextResponse.json({
       outcome,
+      turn,
       questionCount: Object.keys(questions).length,
       configured: isOpenAIConfigured(body.override),
     });

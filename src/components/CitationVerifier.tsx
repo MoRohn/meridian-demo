@@ -13,6 +13,7 @@ import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
 import { EvaluationPanel } from "./EvaluationPanel";
+import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
 import { buildCitationPacket } from "@/lib/eval/packets";
 
 import type { BackendContextMetrics } from "./ContextMeter";
@@ -351,6 +352,7 @@ export function CitationVerifier({
                     : null
                 }
                 openaiConfigured={openaiConfigured}
+                openaiEmptyReason={oaStyle || openaiStatus !== "done" ? undefined : noOpenAIAnswerReason(openaiOutcome, "the relation answer")}
               />
             )}
           </>

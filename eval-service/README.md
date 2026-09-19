@@ -11,6 +11,9 @@ proxies to it server-to-server.
 
 ## Running it
 
+From the repo root, `npm run eval-service:setup` (once) and then `npm run eval-service` do the steps below for you, and
+`npm run meridian` starts the service automatically once it has been set up. To do it by hand:
+
 ```bash
 cd eval-service
 python3 -m venv .venv
@@ -30,7 +33,7 @@ With the service down, the Evaluate panel reports "evaluation service unavailabl
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `OPENAI_API_KEY` | required | The judge model's key. |
+| `OPENAI_API_KEY` | see below | The judge model's key. Not needed if the request carries one. |
 | `EVAL_JUDGE_MODEL` | `gpt-4o-mini` | Which model judges. Any DeepEval-supported chat model. |
 | `EVAL_PASS_THRESHOLD` | `0.6` | Score at or above which an answer passes. |
 | `EVAL_TOP_LOGPROBS` | `1` | How many candidate score tokens G-Eval averages over. See "Why `top_logprobs=1`" below. |
@@ -42,6 +45,26 @@ DeepEval's anonymous telemetry is switched off at import (`DEEPEVAL_TELEMETRY_OP
 confidential contract content. **Do not set `CONFIDENT_API_KEY` or run `deepeval login`**: that makes
 `deepeval test run` upload test cases, which here contain contract text, to Confident AI. The service logs
 a warning and `/health` reports `confident_ai_configured` if a key is present.
+
+### Using the OpenAI key saved in Meridian's Settings
+
+The key you save in Meridian's **API Keys** dialog lives only in your browser's `localStorage`, so nothing outside the
+browser can read it, and it doesn't need to. When you click **Evaluate**, the browser sends that key with the request,
+exactly as the app's other routes do, and the judge uses it for that one call:
+
+- It travels from the app to this service in an `X-Judge-Api-Key` header, never in a body, and **only over https or to
+  this machine**; the app refuses to forward it over plaintext http to a remote host and says so.
+- It wins over `OPENAI_API_KEY` when both exist, so the service needs no key of its own. Each request gets its own model
+  object, so concurrent requests with different keys cannot see each other's (64 concurrent alternating-key requests are
+  tested).
+- It is never stored, never returned, and never logged. Every log record from every logger, including third-party ones
+  that echo provider errors, is redacted at the record factory, and error text is redacted before it reaches a reader.
+- Only the *key* is used. The judge keeps its own model (`EVAL_JUDGE_MODEL`), independent of the model picked for chat.
+
+The status line in the evaluation panel says "Judge ready, using your saved OpenAI key" when this is in effect.
+
+Limit: command-line runs (`deepeval test run`, `golden/run_golden.py`, `golden/synth.py`) cannot read browser storage, so
+they still need `OPENAI_API_KEY` in the environment or in `eval-service/.env`.
 
 ## How a judgment is built
 

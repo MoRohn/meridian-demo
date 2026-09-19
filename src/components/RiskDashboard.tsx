@@ -7,6 +7,7 @@ import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
 import { EvaluationPanel } from "./EvaluationPanel";
+import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
 import { buildRiskPacket, type RiskRating } from "@/lib/eval/packets";
 
 function riskTone(overall: number) {
@@ -50,8 +51,8 @@ function openaiRatings(risk: NonNullable<ReturnType<typeof computeOpenAIRisk>>):
 }
 
 /** A one-line summary of which dimension is driving the composite score, so the headline number always comes with a "why." */
-function drivingFactor(risk: CompositeRisk): string {
-  const top = [...risk.perDimension].sort((a, b) => b.normalized - a.normalized)[0];
+function drivingFactor(ratings: { id: RiskDimensionId; normalized: number }[]): string {
+  const top = [...ratings].sort((a, b) => b.normalized - a.normalized)[0];
   if (top.normalized < 0.33) return "No single dimension stands out; every clause scored low.";
   const dim = RISK_DIMENSIONS[top.id];
   return `Primarily driven by ${dim.label.toLowerCase()} (weight ${dim.weight}).`;
@@ -133,6 +134,7 @@ function ExcerptRiskSection({
               : null
           }
           openaiConfigured={openaiConfigured}
+          openaiEmptyReason={openaiRisk ? undefined : noOpenAIAnswerReason(excerptOpenaiOutcome, "the three risk ratings")}
         />
       )}
     </div>
@@ -232,7 +234,7 @@ export function RiskDashboard({
             <span className="text-5xl font-extrabold tracking-tight text-foreground">{Math.round(risk.overall * 100)}%</span>
             <span className={`text-sm font-bold ${ts.text}`}>{ts.label}</span>
           </div>
-          <p className="mt-2 text-xs font-medium text-muted">{drivingFactor(risk)}</p>
+          <p className="mt-2 text-xs font-medium text-muted">{drivingFactor(risk.perDimension)}</p>
         </div>
 
         <div className="animate-in overflow-hidden rounded-xl border border-border bg-surface p-4">
@@ -244,6 +246,7 @@ export function RiskDashboard({
                 <span className="text-5xl font-extrabold tracking-tight text-foreground">{Math.round(openaiRisk!.overall * 100)}%</span>
                 <span className={`text-sm font-bold ${oa.text}`}>{oa.label}</span>
               </div>
+              <p className="mt-2 text-xs font-medium text-muted">{drivingFactor(openaiRatings(openaiRisk!))}</p>
             </>
           ) : (
             <p className="pt-2 text-sm text-muted">
@@ -313,6 +316,7 @@ export function RiskDashboard({
             : null
         }
         openaiConfigured={openaiConfigured}
+        openaiEmptyReason={openaiRisk ? undefined : noOpenAIAnswerReason(openaiOutcome, "the three risk ratings")}
       />
     </div>
   );

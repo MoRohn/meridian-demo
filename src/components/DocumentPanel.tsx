@@ -210,14 +210,14 @@ export function DocumentPanel({
         </div>
       )}
 
-      <div className="border-b border-border px-3 py-2.5 sm:px-4 sm:py-3">
-        <div className="mb-2 flex items-center justify-between">
+      <div className="border-b border-border px-3 py-2.5 sm:px-4 sm:py-3 short:py-1.5">
+        <div className="mb-2 flex items-center justify-between short:mb-1">
           <p className="text-xs font-bold uppercase tracking-wide text-muted">Documents</p>
           <button onClick={onReset} className="-my-2 -mr-2 px-2 py-2.5 text-sm font-semibold text-secondary transition-colors hover:text-rose-800 lg:py-2">
             Reset session
           </button>
         </div>
-        <div className="-mx-3 flex flex-nowrap gap-1.5 overflow-x-auto px-3 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0 lg:flex-nowrap lg:overflow-x-auto xl:flex-wrap xl:overflow-visible">
+        <div className="-mx-3 flex flex-nowrap gap-1.5 overflow-x-auto px-3 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0 lg:flex-nowrap lg:overflow-x-auto xl:flex-wrap xl:overflow-visible short:flex-nowrap short:overflow-x-auto">
           {SAMPLE_CONTRACTS.map((c) => {
             const active = activeDocumentId === c.id;
             return (
@@ -255,7 +255,7 @@ export function DocumentPanel({
             }}
           />
         </div>
-        <p className="mt-1.5 hidden text-xs text-muted sm:block lg:hidden xl:block">drag a .pdf, .docx, or .txt file anywhere into this panel</p>
+        <p className="mt-1.5 hidden text-xs text-muted sm:block lg:hidden xl:block short:!hidden">drag a .pdf, .docx, or .txt file anywhere into this panel</p>
         {uploadError && <p className="mt-1.5 text-xs font-semibold text-rose-800">{uploadError}</p>}
       </div>
 
@@ -267,7 +267,7 @@ export function DocumentPanel({
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-border bg-surface px-3 py-2 sm:px-4">
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-border bg-surface px-3 py-2 sm:px-4 short:flex-nowrap short:py-1">
             <p className="min-w-0 max-w-full truncate text-base font-bold text-foreground">{document.name}</p>
             <div className="flex shrink-0 items-center gap-1">
               {pages.length > 1 && (
@@ -313,7 +313,7 @@ export function DocumentPanel({
               </button>
             </div>
           ) : (
-            <p className="border-b border-border bg-accent-soft px-4 py-1.5 text-xs font-semibold text-accent-ink">
+            <p className="border-b border-border bg-accent-soft px-4 py-1.5 text-xs font-semibold text-accent-ink short:hidden">
               Highlight any passage: score it in the Risk and Compliance tabs, or drop it straight into the Citations tab as a quote to verify.
             </p>
           )}
