@@ -7,12 +7,11 @@ import { ProbabilityBar } from "./ProbabilityBar";
 import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar } from "./EvalSummaryBar";
+import { Icon } from "./Icon";
 import { EvaluationPanel } from "./EvaluationPanel";
-
-const REPLY_CRITERIA =
-  "Given the document text in context, assess whether the reply is well-reasoned, grounded in the " +
-  "actual document content, and correctly reflects the underlying judgments rather than making " +
-  "unsupported claims.";
+import { buildReplyPacket } from "@/lib/eval/packets";
+import type { ComplianceFlag } from "@/lib/orchestrator/run";
+import type { CompositeRisk } from "@/lib/skills/clauseRisk";
 
 const SKILL_LABELS: Record<string, string> = {
   guardrails: "Guardrails",
@@ -33,6 +32,7 @@ export function ReasoningTrace({
   lastMessage,
   lastReply,
   documentText,
+  judgments,
 }: {
   trace: TraceEntry[];
   source: "live" | "mock";
@@ -46,6 +46,8 @@ export function ReasoningTrace({
   lastMessage?: string | null;
   lastReply?: string | null;
   documentText?: string | null;
+  /** The risk and compliance judgments the reply was composed from, checked against the reply by the judge. */
+  judgments?: { risk: CompositeRisk | null; flags: ComplianceFlag[] } | null;
 }) {
   if (trace.length === 0) {
     return (
@@ -65,7 +67,7 @@ export function ReasoningTrace({
     <div className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <EvalSummaryBar
-          icon="🧠"
+          icon="trace"
           headline={`${trace.length} question${trace.length === 1 ? "" : "s"} in one call`}
           stats={[
             { label: "used:", value: `${usedEntries.length}/${trace.length}` },
@@ -112,12 +114,18 @@ export function ReasoningTrace({
 
       {lastReply && (
         <EvaluationPanel
-          task="Chat reply quality"
-          criteria={REPLY_CRITERIA}
-          input={lastMessage ?? ""}
-          context={documentText ?? undefined}
-          typesafeOutput={lastReply}
-          openaiOutput={null}
+          kind="reply"
+          typesafePacket={buildReplyPacket({
+            message: lastMessage ?? "",
+            reply: lastReply,
+            risk: judgments?.risk
+              ? { overall: judgments.risk.overall, ratings: judgments.risk.perDimension.map((d) => ({ id: d.id, normalized: d.normalized })) }
+              : null,
+            flags: judgments?.flags ?? [],
+            sourceText: documentText ?? null,
+          })}
+          typesafeSource={source}
+          openaiPacket={null}
           openaiConfigured={openaiConfigured}
         />
       )}
@@ -174,17 +182,17 @@ function TraceCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
         <div>
           <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">TypeSafe</p>
           <AnswerView answer={entry.answer} />
         </div>
-        <div className="border-t border-border/60 pt-2 lg:border-t-0 lg:border-l lg:pl-3 lg:pt-0">
+        <div className="border-t border-border/60 pt-2 @xl:border-t-0 @xl:border-l @xl:pl-3 @xl:pt-0">
           <div className="mb-1 flex items-center justify-between">
             <p className="text-xs font-bold uppercase tracking-wide text-muted">OpenAI</p>
             {match != null && (
-              <span className={`text-xs font-bold ${match ? "text-emerald-700" : "text-rose-700"}`}>
-                {match ? "✓ agrees" : "✕ disagrees"}
+              <span className={`text-xs font-bold ${match ? "text-emerald-800" : "text-rose-800"}`}>
+                <span className="inline-flex items-center gap-1"><Icon name={match ? "check" : "x"} size={12} />{match ? "agrees" : "disagrees"}</span>
               </span>
             )}
           </div>

@@ -46,3 +46,7 @@ eval-service/__pycache__
 eval-service/**/__pycache__
 .deepeval*
 .temp_test_run_data.json
+eval-service/golden/last_report.json
+eval-service/golden/last_rejections.json
+.coverage
+eval-service/.coverage

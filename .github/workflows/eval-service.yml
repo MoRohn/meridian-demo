@@ -1,0 +1,57 @@
+name: Eval service
+
+on:
+  push:
+    branches: [main]
+    paths: ["eval-service/**", "src/lib/eval/**", ".github/workflows/eval-service.yml"]
+  pull_request:
+    paths: ["eval-service/**", "src/lib/eval/**", ".github/workflows/eval-service.yml"]
+  workflow_dispatch:
+    inputs:
+      judge_golden:
+        description: "Also score the real judge against the golden set (real, billed OpenAI calls)"
+        type: boolean
+        default: false
+
+# Telemetry stays off everywhere: the text under test is confidential contract content.
+env:
+  DEEPEVAL_TELEMETRY_OPT_OUT: "1"
+
+jobs:
+  service-tests:
+    # Free: no judge key, the judge is stubbed. The golden tests that need a real judge skip themselves.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eval-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: eval-service/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q
+
+  judge-golden:
+    # Manual only. Never gate every push on a paid judge call.
+    if: github.event_name == 'workflow_dispatch' && inputs.judge_golden
+    needs: service-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eval-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: eval-service/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: deepeval test run (golden set)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Deliberately no CONFIDENT_API_KEY: it would upload contract text to a third party.
+        run: deepeval test run tests/evals/test_judge_golden.py -n 4 -id "ci-${{ github.run_id }}"

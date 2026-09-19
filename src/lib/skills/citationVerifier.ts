@@ -28,6 +28,8 @@ export interface CitationCheckResult {
   usage: { input_tokens: number; output_tokens: number };
   /** Exact UTF-8 byte size of the `{ claim, source_section }` state actually sent to Jev. */
   inputBytes: number;
+  /** Whether the relation answer came from the live model or the local demo heuristic; null when no model was called. */
+  source: "live" | "mock" | null;
 }
 
 const AUTO_ACCEPT = 0.75;
@@ -134,6 +136,7 @@ export async function verifyCitation(
       elapsedMs: 0,
       usage: { input_tokens: 0, output_tokens: 0 },
       inputBytes: 0,
+      source: null,
     };
   }
 
@@ -150,5 +153,6 @@ export async function verifyCitation(
     elapsedMs: response.elapsedMs,
     usage: response.usage,
     inputBytes: Buffer.byteLength(JSON.stringify(request.state), "utf8"),
+    source: response.source,
   };
 }

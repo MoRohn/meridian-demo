@@ -8,6 +8,13 @@ export interface ChatMessage {
   text: string;
 }
 
+/** Assistant replies are composed from templates that use `**bold**`; render it instead of showing the asterisks. */
+function renderBold(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? <strong key={i}>{part.slice(2, -2)}</strong> : part,
+  );
+}
+
 /**
  * The conversation surface: messages, suggestions, and the input. Document
  * loading/upload lives in DocumentPanel now (the left column) — this
@@ -89,7 +96,7 @@ export function ChatConversation({
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} tabIndex={0} role="log" aria-label="Conversation" className="flex-1 space-y-3 overflow-y-auto px-4 py-4 [mask-image:linear-gradient(to_bottom,transparent,black_28px)]">
         {messages.length === 0 && (
           <div className="animate-in rounded-2xl border border-dashed border-border-strong bg-surface p-4 text-base font-medium leading-relaxed text-secondary">
             Load or upload a document on the left, then ask the assistant to analyze it — or highlight any passage
@@ -111,7 +118,7 @@ export function ChatConversation({
                   : "rounded-bl-sm border border-border bg-surface text-foreground"
               }`}
             >
-              {m.text}
+              {m.role === "assistant" ? renderBold(m.text) : m.text}
             </div>
           </div>
         ))}
@@ -129,13 +136,13 @@ export function ChatConversation({
         )}
       </div>
 
-      <div className="border-t border-border bg-surface p-3">
+      <div className="border-t border-border bg-surface p-3 short:py-2">
         {selectedExcerpt && (
           <p className="mb-1.5 text-xs font-semibold text-accent-ink">
             A passage is highlighted: Analyze/Check compliance below score just that excerpt.
           </p>
         )}
-        <div className="mb-2 flex flex-wrap gap-1.5">
+        <div className="-mx-3 mb-2 flex flex-nowrap gap-1.5 overflow-x-auto px-3 pb-0.5 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
           {SUGGESTIONS.map((s) => {
             const runsOnExcerpt = Boolean(s.excerptAction && selectedExcerpt);
             return (
@@ -150,7 +157,7 @@ export function ChatConversation({
                 }}
                 disabled={sending}
                 title={runsOnExcerpt ? "Scores the highlighted excerpt" : undefined}
-                className={`rounded-full border px-3 py-1.5 text-sm font-semibold transition-colors disabled:opacity-40 ${
+                className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-2.5 text-sm font-semibold lg:py-1.5 transition-colors disabled:opacity-40 ${
                   runsOnExcerpt
                     ? "border-accent/50 bg-accent-soft text-accent-ink hover:border-accent"
                     : "border-border-strong text-secondary hover:border-deep/30 hover:text-deep"

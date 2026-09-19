@@ -11,22 +11,28 @@ import type { TurnContext } from "../orchestrator/state";
 export const COMPLIANCE_CHECKS = {
   auto_renewal_trap: {
     label: "Auto-renewal without adequate notice",
+    definition:
+      "The agreement renews automatically without giving a party a reasonable window (commonly 30-60+ days) to opt out beforehand.",
     instructions:
       "Does `active_document.text` auto-renew the agreement without giving a party a " +
       "reasonable window (commonly 30-60+ days) to opt out beforehand?",
   },
   unlimited_liability: {
     label: "Unlimited or unclear liability",
+    definition: "The agreement leaves liability uncapped or does not state a liability limit at all.",
     instructions: "Does `active_document.text` leave liability uncapped or fail to state a liability limit at all?",
   },
   missing_data_protection_clause: {
     label: "Personal data handled, no data-protection clause",
+    definition:
+      "The agreement involves processing personal or customer data but omits a data protection, confidentiality, or privacy-compliance clause covering it.",
     instructions:
       "Does `active_document.text` involve processing personal or customer data, but omit a data " +
       "protection, confidentiality, or privacy-compliance clause covering it?",
   },
   missing_governing_law: {
     label: "No governing law / jurisdiction clause",
+    definition: "The agreement does not state which jurisdiction's law governs it.",
     instructions: "Does `active_document.text` fail to state which jurisdiction's law governs the agreement?",
   },
 } as const;

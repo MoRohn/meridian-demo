@@ -19,7 +19,7 @@ export function RerunButton({
       disabled={pending}
       title={label}
       aria-label={label}
-      className="flex shrink-0 items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-2.5 py-1 text-xs font-bold text-secondary transition-colors hover:border-deep/30 hover:text-deep disabled:opacity-50"
+      className="flex shrink-0 items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-2.5 text-xs font-bold lg:px-2.5 lg:py-1 text-secondary transition-colors hover:border-deep/30 hover:text-deep disabled:opacity-50"
     >
       <span aria-hidden className={`inline-block text-sm leading-none ${pending ? "animate-spin" : ""}`}>
         ↻

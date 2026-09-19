@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A small, branded wrapper around `next dev` so `npm run meridian` gives a
+ * Wrapper around `next dev` so `npm run meridian` gives a
  * clean, predictable startup: a fixed port (fails loudly instead of
  * silently hopping to another one when it's taken), a real `meridian.local`
  * URL once it's set up (falling back to localhost with clear one-time setup
@@ -41,7 +41,7 @@ function openBrowser(url) {
   try {
     spawn(cmd, args, { shell: platform === "win32", stdio: "ignore", detached: true }).unref();
   } catch {
-    // Non-fatal — the banner already printed the URL to open by hand.
+    // Non-fatal. the banner already printed the URL to open by hand.
   }
 }
 
@@ -94,7 +94,7 @@ async function main() {
   console.log(`  Starting on ${url} ...`);
 
   // Bind on all interfaces (Next's default) so it answers to localhost,
-  // 127.0.0.1, AND meridian.local alike — only the URL we print/open differs.
+  // 127.0.0.1, AND meridian.local alike only the URL we print/open differs.
   const child = spawn("npx", ["next", "dev", "-p", String(PORT)], {
     stdio: "inherit",
     shell: process.platform === "win32",

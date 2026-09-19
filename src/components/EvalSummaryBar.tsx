@@ -1,3 +1,5 @@
+import { Icon, type IconName } from "./Icon";
+
 export interface SummaryStat {
   label: string;
   value: string;
@@ -5,9 +7,9 @@ export interface SummaryStat {
 }
 
 const TONE_TEXT: Record<NonNullable<SummaryStat["tone"]>, string> = {
-  rose: "text-rose-700",
-  amber: "text-amber-700",
-  emerald: "text-emerald-700",
+  rose: "text-rose-800",
+  amber: "text-amber-800",
+  emerald: "text-emerald-800",
   neutral: "text-foreground",
 };
 
@@ -23,16 +25,14 @@ export function EvalSummaryBar({
   headline,
   stats,
 }: {
-  icon: string;
+  icon: IconName;
   headline: string;
   stats: SummaryStat[];
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border bg-elevated px-4 py-3">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="text-xl leading-none" aria-hidden>
-          {icon}
-        </span>
+        <Icon name={icon} size={20} className="text-deep" />
         <span className="truncate text-sm font-extrabold text-foreground">{headline}</span>
       </div>
       {stats.length > 0 && (

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DocumentPanel } from "@/components/DocumentPanel";
 import { ChatConversation, type ChatMessage } from "@/components/ChatConversation";
+import { MobileNav, type MobileView } from "@/components/MobileNav";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { AppHeader, type BackendActivity } from "@/components/AppHeader";
 import { Workspace, type WorkspaceTab } from "@/components/Workspace";
 import { ReasoningTrace } from "@/components/ReasoningTrace";
@@ -63,7 +65,13 @@ export default function Home() {
   const [documentExpanded, setDocumentExpanded] = useState(false);
 
   const [trace, setTrace] = useState<TraceEntry[]>([]);
+  /** Which pane is showing below the lg breakpoint; the two-column desktop layout ignores it. */
+  const [mobileView, setMobileView] = useState<MobileView>("assistant");
+  const [seenVersions, setSeenVersions] = useState({ analysis: 0, assistant: 0 });
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [traceSource, setTraceSource] = useState<"live" | "mock">("mock");
+  /** The judgments the last chat reply was composed from (not scope-filtered), so the reply can be checked against them. */
+  const [lastJudgments, setLastJudgments] = useState<{ risk: CompositeRisk | null; flags: ComplianceFlag[] } | null>(null);
   const [risk, setRisk] = useState<CompositeRisk | null>(null);
   const [complianceFlags, setComplianceFlags] = useState<ComplianceFlag[]>([]);
   /** Whatever chat message most recently produced the Trace tab's content — re-run by the Trace tab's retry button. */
@@ -86,6 +94,8 @@ export default function Home() {
   const [selectedExcerpt, setSelectedExcerpt] = useState<string | null>(null);
   const [excerptStatus, setExcerptStatus] = useState<"idle" | "pending" | "done" | "error">("idle");
   const [excerptRisk, setExcerptRisk] = useState<CompositeRisk | null>(null);
+  /** Whether the highlighted-excerpt TypeSafe answer came from the live model or the local demo heuristic. */
+  const [excerptSource, setExcerptSource] = useState<"live" | "mock" | null>(null);
   const [excerptComplianceFlags, setExcerptComplianceFlags] = useState<ComplianceFlag[]>([]);
   const [excerptOaOutcome, setExcerptOaOutcome] = useState<OpenAIRunOutcome | null>(null);
 
@@ -228,6 +238,7 @@ export default function Home() {
         setLastReply(result.reply);
         setTrace(result.trace);
         setTraceSource(result.source);
+        setLastJudgments({ risk: result.risk, flags: result.complianceFlags ?? [] });
         // A tab's own action button only ever touches that tab's state — the
         // Risk rerun never silently updates Compliance's flags and vice
         // versa, even though one fan-out call computes both under the hood.
@@ -347,6 +358,7 @@ export default function Home() {
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setExcerptRisk(data.risk);
+        setExcerptSource(data.source === "live" ? "live" : "mock");
         setExcerptComplianceFlags(data.complianceFlags ?? []);
         setExcerptStatus("done");
         setTypesafeMetrics({
@@ -401,6 +413,7 @@ export default function Home() {
   function handleRunExcerptAction(kind: "analyze" | "compliance") {
     if (!selectedExcerpt) return;
     setActiveTab(kind === "analyze" ? "risk" : "compliance");
+    selectMobileView("analysis");
     void handleSelectionChange(selectedExcerpt);
   }
 
@@ -573,17 +586,37 @@ export default function Home() {
     return CONTRACT_TYPES[contextFacts.contractType as keyof typeof CONTRACT_TYPES] ?? contextFacts.contractType;
   }, [contextFacts.contractType]);
 
+  // A monotonic "something new" counter per pane; the dot shows while the pane's
+  // counter is ahead of what the reader last saw there.
+  const analysisVersion = sessionTotals.turns + (excerptStatus === "done" ? 1 : 0);
+  const assistantVersion = messages.length;
+  function selectMobileView(next: MobileView) {
+    setSeenVersions((seen) => ({
+      analysis: next === "analysis" || mobileView === "analysis" ? analysisVersion : seen.analysis,
+      assistant: next === "assistant" || mobileView === "assistant" ? assistantVersion : seen.assistant,
+    }));
+    setMobileView(next);
+  }
+  const mobileBadges = {
+    analysis: analysisVersion !== seenVersions.analysis,
+    assistant: assistantVersion !== seenVersions.assistant,
+  };
+  // "Expanded" is a desktop-only affordance; on small screens the document pane already has the whole screen.
+  const documentFillsColumn = documentExpanded && isDesktop;
+
   const contextBar = (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border bg-surface px-4 py-2.5 text-sm sm:gap-x-5">
+    <section aria-label="Session context" className="flex min-w-0 items-center gap-x-3 gap-y-1.5 border-b border-border bg-surface px-4 py-2 text-sm short:hidden sm:gap-x-5 sm:py-2.5">
       <span className="hidden shrink-0 font-bold uppercase tracking-wide text-muted sm:inline">Context memory</span>
       <ContextFact label="doc" value={activeDocument ? activeDocument.name : "none loaded"} grow />
-      <ContextFact label="type" value={contractTypeLabel ?? "not yet classified"} />
+      <span className="hidden min-w-0 sm:flex">
+        <ContextFact label="type" value={contractTypeLabel ?? "not yet classified"} />
+      </span>
       <ContextFact label="turns" value={String(messages.length)} />
-    </div>
+    </section>
   );
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
+    <div className="flex h-dvh flex-col bg-background text-foreground">
       <AppHeader
         typesafeLive={effectiveTypesafeLive}
         typesafeActivity={headerTypesafe}
@@ -598,9 +631,13 @@ export default function Home() {
         onSave={handleSaveSettings}
       />
       {contextBar}
-      <div className="grid min-w-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-border md:border-r">
-          <div className={`min-h-0 overflow-hidden border-b border-border ${documentExpanded ? "flex-1" : "flex-[0_0_55%]"}`}>
+      <main className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <div className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-border lg:flex lg:border-r ${mobileView === "analysis" ? "hidden" : "flex"}`}>
+          <div
+            className={`min-h-0 overflow-hidden border-border lg:block lg:border-b ${
+              mobileView === "document" ? "block flex-1" : "hidden"
+            } ${documentFillsColumn ? "lg:flex-1" : "lg:flex-[0_0_55%]"}`}
+          >
             <DocumentPanel
               document={activeDocument}
               activeDocumentId={activeDocument?.id ?? null}
@@ -611,23 +648,23 @@ export default function Home() {
               onReset={handleReset}
               selectedExcerpt={selectedExcerpt}
               onSelectionChange={handleSelectionChange}
-              expanded={documentExpanded}
+              expanded={documentFillsColumn}
               onToggleExpand={() => setDocumentExpanded((e) => !e)}
             />
           </div>
           {/* The chat input stays usable no matter what — only the message history collapses while the document is expanded. */}
-          <div className={documentExpanded ? "shrink-0" : "min-h-0 flex-1 overflow-hidden"}>
+          <div className={`lg:block ${mobileView === "assistant" ? "block" : "hidden"} ${documentFillsColumn ? "shrink-0" : "min-h-0 flex-1 overflow-hidden"}`}>
             <ChatConversation
               messages={messages}
               onSend={handleSend}
               sending={sending}
-              compact={documentExpanded}
+              compact={documentFillsColumn}
               selectedExcerpt={selectedExcerpt}
               onRunExcerptAction={handleRunExcerptAction}
             />
           </div>
         </div>
-        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex ${mobileView === "analysis" ? "flex" : "hidden"}`}>
           <ContextMeter stats={contextStats} typesafeMetrics={typesafeMetrics} openaiMetrics={openaiMetrics} />
           <Workspace
             active={activeTab}
@@ -645,6 +682,7 @@ export default function Home() {
                     lastMessage={lastMessage}
                     lastReply={lastReply}
                     documentText={activeDocument?.text}
+                    judgments={lastJudgments}
                   />
                 ),
                 risk: (
@@ -657,6 +695,8 @@ export default function Home() {
                     selectedExcerpt={selectedExcerpt}
                     excerptStatus={excerptStatus}
                     excerptRisk={excerptRisk}
+                    typesafeSource={traceSource}
+                    excerptTypesafeSource={excerptSource}
                     excerptOpenaiOutcome={excerptOaOutcome}
                     onRerun={handleRerunRisk}
                     rerunPending={selectedExcerpt ? excerptStatus === "pending" : sending}
@@ -671,6 +711,8 @@ export default function Home() {
                     openaiConfigured={openaiConfigured}
                     selectedExcerpt={selectedExcerpt}
                     excerptStatus={excerptStatus}
+                    typesafeSource={traceSource}
+                    excerptTypesafeSource={excerptSource}
                     excerptFlags={excerptComplianceFlags}
                     excerptOpenaiOutcome={excerptOaOutcome}
                     onRerun={handleRerunCompliance}
@@ -693,7 +735,8 @@ export default function Home() {
               }}
             />
         </div>
-      </div>
+      </main>
+      <MobileNav active={mobileView} onChange={selectMobileView} badges={mobileBadges} />
     </div>
   );
 }

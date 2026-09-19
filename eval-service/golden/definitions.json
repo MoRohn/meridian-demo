@@ -1,0 +1,49 @@
+{
+  "risk": {
+    "liability_exposure": {
+      "label": "Liability exposure",
+      "weight": 0.5,
+      "levels": [
+        "Liability is mutually capped at a reasonable, clearly stated amount",
+        "Liability is capped, but only for one party or at an unusually high ceiling",
+        "Liability is uncapped for at least one party, or the cap is vague"
+      ]
+    },
+    "indemnification_harshness": {
+      "label": "Indemnification harshness",
+      "weight": 0.3,
+      "levels": [
+        "Indemnification is mutual and scoped to each party's own breaches",
+        "Indemnification leans toward one party but has some carve-outs",
+        "Indemnification is broad, one-sided, and covers third-party claims with no carve-outs"
+      ]
+    },
+    "termination_rigidity": {
+      "label": "Termination rigidity",
+      "weight": 0.2,
+      "levels": [
+        "Either party can terminate with reasonable notice and no penalty",
+        "Termination is possible but requires cause, a long notice period, or a fee",
+        "There is no practical termination-for-convenience path, or exit is heavily penalized"
+      ]
+    }
+  },
+  "compliance": {
+    "auto_renewal_trap": {
+      "label": "Auto-renewal without adequate notice",
+      "definition": "The agreement renews automatically without giving a party a reasonable window (commonly 30-60+ days) to opt out beforehand."
+    },
+    "unlimited_liability": {
+      "label": "Unlimited or unclear liability",
+      "definition": "The agreement leaves liability uncapped or does not state a liability limit at all."
+    },
+    "missing_data_protection_clause": {
+      "label": "Personal data handled, no data-protection clause",
+      "definition": "The agreement involves processing personal or customer data but omits a data protection, confidentiality, or privacy-compliance clause covering it."
+    },
+    "missing_governing_law": {
+      "label": "No governing law / jurisdiction clause",
+      "definition": "The agreement does not state which jurisdiction's law governs it."
+    }
+  }
+}

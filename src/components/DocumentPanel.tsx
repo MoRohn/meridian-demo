@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { SAMPLE_CONTRACTS } from "@/lib/data/sampleContracts";
+import { Icon, type IconName } from "./Icon";
 
-const DOC_ICONS: Record<string, string> = {
-  "saas-msa-onesided": "📄",
-  "mutual-nda": "🤝",
-  "employment-noncompete": "🧾",
+const DOC_ICONS: Record<string, IconName> = {
+  "saas-msa-onesided": "document",
+  "mutual-nda": "users",
+  "employment-noncompete": "briefcase",
 };
 
 const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".txt"];
@@ -144,6 +145,29 @@ export function DocumentPanel({
     onSelectionChange(text);
   }
 
+  // Touch screens select with a long-press and drag handles, which never fires
+  // mouseup; selectionchange (settled for a moment) covers them.
+  const selectionHandler = useRef(handleTextMouseUp);
+  useEffect(() => {
+    selectionHandler.current = handleTextMouseUp;
+  });
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    function onSelectionChange() {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const root = scrollRef.current;
+        const anchor = window.getSelection()?.anchorNode;
+        if (root && anchor && root.contains(anchor)) selectionHandler.current();
+      }, 400);
+    }
+    window.document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      clearTimeout(timer);
+      window.document.removeEventListener("selectionchange", onSelectionChange);
+    };
+  }, []);
+
   const pages = useMemo(() => (document ? paginate(document.text) : []), [document]);
 
   // Keeps the page indicator honest during free scrolling, not just when the
@@ -186,14 +210,14 @@ export function DocumentPanel({
         </div>
       )}
 
-      <div className="border-b border-border px-4 py-3">
+      <div className="border-b border-border px-3 py-2.5 sm:px-4 sm:py-3">
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-bold uppercase tracking-wide text-muted">Documents</p>
-          <button onClick={onReset} className="text-sm font-semibold text-secondary transition-colors hover:text-rose-700">
+          <button onClick={onReset} className="-my-2 -mr-2 px-2 py-2.5 text-sm font-semibold text-secondary transition-colors hover:text-rose-800 lg:py-2">
             Reset session
           </button>
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="-mx-3 flex flex-nowrap gap-1.5 overflow-x-auto px-3 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0 lg:flex-nowrap lg:overflow-x-auto xl:flex-wrap xl:overflow-visible">
           {SAMPLE_CONTRACTS.map((c) => {
             const active = activeDocumentId === c.id;
             return (
@@ -201,13 +225,13 @@ export function DocumentPanel({
                 key={c.id}
                 onClick={() => onLoadDocument(c.id)}
                 title={c.blurb}
-                className={`flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-sm font-semibold transition-all ${
+                className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-2 text-sm font-semibold transition-all ${
                   active
                     ? "border-transparent bg-accent text-accent-ink shadow-sm"
                     : "border-border-strong bg-surface text-secondary hover:border-deep/30 hover:text-deep"
                 }`}
               >
-                <span aria-hidden>{DOC_ICONS[c.id] ?? "📎"}</span>
+                <Icon name={DOC_ICONS[c.id] ?? "document"} size={16} />
                 {c.name}
               </button>
             );
@@ -215,9 +239,9 @@ export function DocumentPanel({
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
-            className="flex items-center gap-1.5 rounded-full border border-dashed border-border-strong bg-surface px-3.5 py-2 text-sm font-semibold text-secondary transition-all hover:border-deep/30 hover:text-deep disabled:opacity-50"
+            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-dashed border-border-strong bg-surface px-3.5 py-2 text-sm font-semibold text-secondary transition-all hover:border-deep/30 hover:text-deep disabled:opacity-50"
           >
-            <span aria-hidden>{uploading ? "⏳" : "⬆️"}</span>
+            <Icon name={uploading ? "loader" : "upload"} size={16} />
             {uploading ? "Uploading…" : "Upload a file"}
           </button>
           <input
@@ -231,8 +255,8 @@ export function DocumentPanel({
             }}
           />
         </div>
-        <p className="mt-1.5 text-xs text-muted">drag a .pdf, .docx, or .txt file anywhere into this panel</p>
-        {uploadError && <p className="mt-1.5 text-xs font-semibold text-rose-700">{uploadError}</p>}
+        <p className="mt-1.5 hidden text-xs text-muted sm:block lg:hidden xl:block">drag a .pdf, .docx, or .txt file anywhere into this panel</p>
+        {uploadError && <p className="mt-1.5 text-xs font-semibold text-rose-800">{uploadError}</p>}
       </div>
 
       {!document ? (
@@ -243,8 +267,8 @@ export function DocumentPanel({
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-4 py-2">
-            <p className="truncate text-base font-bold text-foreground">{document.name}</p>
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-border bg-surface px-3 py-2 sm:px-4">
+            <p className="min-w-0 max-w-full truncate text-base font-bold text-foreground">{document.name}</p>
             <div className="flex shrink-0 items-center gap-1">
               {pages.length > 1 && (
                 <div className="mr-1 flex items-center gap-1 rounded-full border border-border-strong bg-elevated px-1 py-0.5">
@@ -269,9 +293,9 @@ export function DocumentPanel({
               <button
                 onClick={onToggleExpand}
                 title={expanded ? "Collapse back to split view" : "Expand to fill this panel"}
-                className="ml-1 flex h-8 items-center gap-1 rounded-full border border-border-strong bg-elevated px-3 text-sm font-bold text-secondary transition-colors hover:border-deep/30 hover:text-deep"
+                className="ml-1 hidden h-8 items-center gap-1 rounded-full border border-border-strong bg-elevated px-3 text-sm font-bold text-secondary transition-colors hover:border-deep/30 hover:text-deep lg:flex"
               >
-                {expanded ? "⤡ Collapse" : "⤢ Expand"}
+                {expanded ? "Collapse" : "Expand"}
               </button>
             </div>
           </div>
@@ -295,7 +319,7 @@ export function DocumentPanel({
           )}
 
           <div className="relative flex-1 overflow-hidden">
-            <div ref={scrollRef} className="h-full overflow-auto bg-elevated/60 p-6" onMouseUp={handleTextMouseUp}>
+            <div ref={scrollRef} tabIndex={0} role="region" aria-label="Document preview" className="h-full overflow-auto bg-elevated/60 p-3 sm:p-6" onMouseUp={handleTextMouseUp}>
               <div className="mx-auto flex max-w-[52rem] flex-col items-center gap-6">
                 {pages.map((pageText, i) => (
                   <div
@@ -303,7 +327,7 @@ export function DocumentPanel({
                     ref={(el) => {
                       pageRefs.current[i] = el;
                     }}
-                    className="w-full rounded-sm bg-[#fdfcf6] px-10 py-10 shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.12)] sm:px-14 sm:py-14"
+                    className="w-full rounded-sm bg-[#fdfcf6] px-5 py-6 shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.12)] sm:px-14 sm:py-14"
                     style={{ aspectRatio: pages.length > 1 ? "8.5 / 11" : undefined, minHeight: pages.length > 1 ? undefined : "auto" }}
                   >
                     <pre
@@ -345,7 +369,7 @@ function ZoomButton({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className="flex h-8 w-8 items-center justify-center rounded-full border border-border-strong bg-elevated text-base font-bold text-secondary transition-colors hover:border-deep/30 hover:text-deep disabled:opacity-30"
+      className="flex h-10 w-10 items-center justify-center rounded-full border border-border-strong bg-elevated text-base font-bold lg:h-8 lg:w-8 text-secondary transition-colors hover:border-deep/30 hover:text-deep disabled:opacity-30"
     >
       {children}
     </button>
@@ -369,7 +393,7 @@ function PageNavButton({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-full text-lg font-bold text-secondary transition-colors hover:text-deep disabled:opacity-25"
+      className="flex h-10 w-10 items-center justify-center rounded-full text-lg font-bold lg:h-7 lg:w-7 text-secondary transition-colors hover:text-deep disabled:opacity-25"
     >
       {children}
     </button>

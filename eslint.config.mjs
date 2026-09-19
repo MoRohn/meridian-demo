@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The Python eval service (and its virtualenv, which can ship JavaScript such as coverage reports) is not app code.
+    "eval-service/**",
   ]),
 ]);
 

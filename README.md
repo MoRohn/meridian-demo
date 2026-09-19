@@ -251,23 +251,30 @@ state plainly rather than faking activity. Either way, the qualitative differenc
 ### A third, independent judgment: DeepEval
 
 Everything above measures TypeSafe's and OpenAI's own confidence in their own answers. That's not
-the same question as "was the answer actually good?" — for that, Meridian can call out to a small
-Python microservice ([`eval-service/`](eval-service/)) wrapping
-[DeepEval](https://github.com/confident-ai/deepeval)'s `GEval` metric: an LLM-as-judge that scores
-a given output against a natural-language rubric and writes out its own chain-of-thought reasoning
-for the score.
+the same question as "was the answer actually good?" For that, Meridian calls a small Python
+microservice ([`eval-service/`](eval-service/)) wrapping [DeepEval](https://github.com/confident-ai/deepeval)'s
+`GEval` metric: an LLM-as-judge that scores an answer against a versioned rubric and explains why.
 
-An **Evaluate** button appears wherever Meridian shows a judgment — the Trace tab's composed
-reply, Risk's composite score, Compliance's flag set, a Citation verdict — and scores *both*
-backends' answers independently against the same task-specific rubric, so the score and reasoning
-sit side by side just like everything else in this app. It's opt-in (a real LLM call, not
-free) and genuinely optional infrastructure: with the eval service not running, the button reports
-"eval service unreachable" instead of a score, the same honest treatment a missing `OPENAI_API_KEY`
-gets everywhere else. See [`eval-service/README.md`](eval-service/README.md) for how to run it.
+Every tab that shows a judgment has the same **evaluation panel**: a title and one-line subtitle
+saying what is being checked, then one card per backend with the metrics first (score, pass
+threshold, judge model, rubric version, latency) and the messages below them: the judge's verdict,
+any untrusted-content warning, the exact evidence the judge saw, and the fixed steps it followed.
 
-This has to live in a separate Python process — DeepEval is Python-only, and Meridian itself is
-TypeScript — proxied server-to-server through [`/api/evaluate`](src/app/api/evaluate/route.ts),
-the same pattern used for every other backend call in this app.
+What makes the score trustworthy, and what does not:
+
+- **Like-for-like.** Both backends' answers are rendered by the same packet builder
+  ([`src/lib/eval/packets.ts`](src/lib/eval/packets.ts)), with the scoring method and scale
+  definitions included so the judge can verify the arithmetic. Confidence is excluded on purpose.
+- **Reproducible.** The judge follows fixed, versioned steps, not steps it invents per call.
+- **Hardened against the document itself.** Contract text is sanitized, fenced as untrusted data,
+  and scanned for prompt-injection attempts; a suspicious document produces a visible warning.
+- **Never the demo heuristic.** Without a live TypeSafe key, answers come from a local keyword
+  heuristic. Those are not evaluated as if they were TypeSafe's; the panel says so.
+- **Measured, not assumed.** [`eval-service/golden/run_golden.py`](eval-service/golden/run_golden.py)
+  scores the judge itself against 27 known-answer cases, including injection attacks.
+
+It's opt-in (a real LLM call) and genuinely optional infrastructure: with the service not running,
+the panel reports "evaluation service unavailable." See [`eval-service/README.md`](eval-service/README.md).
 
 ## Mapping to the job description
 
@@ -279,7 +286,7 @@ the same pattern used for every other backend call in this app.
 | Explain AI architecture decisions and how components interact | The Trace, Risk, Compliance, and Citations tabs make the architecture visible at runtime, not just in this README |
 | Experience with Semantic Kernel / plugin-based AI frameworks | The skills registry is deliberately shaped like SK's plugin/function model — see "The skills/plugin architecture" above |
 | Experience with RAG, vector databases, embeddings | Citation verification is a RAG-shaped retrieve-then-judge pipeline; `src/lib/data/authorities.ts` stands in for a vector-store-backed retrieval step (swap the substring `locate()` in `citationVerifier.ts` for embedding search against a real corpus — the judgment step downstream doesn't change) |
-| AI evaluation, observability, model performance optimization | Every trace entry records which skill asked what, the full probability distribution, and whether the answer was actually used — the raw material for an eval harness; see also "Testing," below |
+| AI evaluation, observability, model performance optimization | Per-answer DeepEval judgments with versioned rubrics and an injection-hardened judge, a golden-set harness for the judge itself, and `/stats` + structured logs on the eval service; see "A third, independent judgment," above |
 | Deploy AI solutions in AWS or Azure | See "Taking this to production," below |
 
 ## Testing
@@ -309,6 +316,13 @@ assertions rather than eyeballing in the UI:
   matching the `gpt-4o` reference price by accident depends on table ordering).
 - **Settings** (`src/lib/settings.ts`) — a blank/whitespace-only key never produces a
   usable override, and the module never throws when `window` doesn't exist (SSR).
+
+`npm run test:e2e` drives the running app in a real browser (Chrome via `playwright-core`) at eight screen sizes, phone through
+1920px, checking layout, accessibility (axe), keyboard and dialog behavior, and touch-target sizes. It needs no API keys.
+
+The eval service has its own suites: `pytest -q` in `eval-service/` covers validation, prompt construction, injection detection, and
+monitoring with the judge stubbed, and `python golden/run_golden.py` scores the real judge against known-answer cases (see
+[`eval-service/README.md`](eval-service/README.md)).
 
 What's deliberately *not* covered here: React components and the API routes themselves —
 the components are thin rendering of already-tested data, and the routes are thin

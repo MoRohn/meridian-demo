@@ -13,10 +13,8 @@ import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
 import { EvaluationPanel } from "./EvaluationPanel";
+import { buildCitationPacket } from "@/lib/eval/packets";
 
-const CITATION_CRITERIA =
-  "Given the source section in context, assess whether the verdict correctly reflects whether that " +
-  "section actually supports, contradicts, or says nothing about the claim.";
 import type { BackendContextMetrics } from "./ContextMeter";
 
 const VERDICT_STYLES: Record<CitationCheckResult["verdict"], string> = {
@@ -34,6 +32,9 @@ const VERDICT_TONE: Record<CitationCheckResult["verdict"], "emerald" | "rose" | 
 };
 
 /** The raw `relation` choice OpenAI returns, mapped the same way the TypeSafe side maps it to a verdict — so both columns can share one visual language instead of TypeSafe showing a styled verdict card next to OpenAI's plain, uncolored list. */
+/** The relation names as the judge's rubric spells them. */
+const RELATION_LABELS: Record<string, string> = { supports: "supports", contradicts: "contradicts", says_nothing: "says nothing (silent)" };
+
 const OPENAI_RELATION_STYLE: Record<string, { verdict: CitationCheckResult["verdict"]; label: string }> = {
   supports: { verdict: "verified", label: "Supports" },
   contradicts: { verdict: "contradicted", label: "Contradicts" },
@@ -169,7 +170,7 @@ export function CitationVerifier({
           <button
             key={ex.id}
             onClick={() => runCheck(ex.claim, ex.quote ?? "", ex.sectionId)}
-            className="rounded-full border border-border-strong bg-surface px-2.5 py-1 text-sm text-secondary transition-colors hover:border-accent/50 hover:text-accent-strong"
+            className="rounded-full border border-border-strong bg-surface px-2.5 py-1 text-sm text-secondary transition-colors hover:border-deep/30 hover:text-deep"
           >
             {ex.label}
           </button>
@@ -220,7 +221,7 @@ export function CitationVerifier({
         return (
           <>
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <EvalSummaryBar icon="🔎" headline={headline} stats={summaryStats} />
+              <EvalSummaryBar icon="search" headline={headline} stats={summaryStats} />
               {lastRun && (
                 <RerunButton
                   onClick={() => runCheck(lastRun.claim, lastRun.quote, lastRun.sectionId)}
@@ -229,15 +230,15 @@ export function CitationVerifier({
                 />
               )}
             </div>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
           <ActivityWindow title="TypeSafe" subtitle="locate → Choice" status={typesafeStatus} accent="deep">
             {typesafeStatus === "pending" && <p className="text-sm font-medium text-secondary">Checking…</p>}
-            {typesafeStatus === "error" && <p className="text-sm font-bold text-rose-700">That check failed. Try again.</p>}
+            {typesafeStatus === "error" && <p className="text-sm font-bold text-rose-800">That check failed. Try again.</p>}
             {result && typesafeStatus === "done" && (
               <div className={`space-y-3 rounded-xl border p-3 ${VERDICT_STYLES[result.verdict]}`}>
                 <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                   <span className="text-lg font-extrabold uppercase tracking-wide">{result.verdict}</span>
-                  <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-xs font-bold opacity-80">
+                  <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-xs font-bold">
                     {result.autoAccept ? "Auto-accepted" : "Needs human review"}
                   </span>
                 </div>
@@ -257,13 +258,13 @@ export function CitationVerifier({
                           tone={VERDICT_TONE[result.verdict]}
                           highlight
                         />
-                        <p className="text-xs font-semibold opacity-75">
+                        <p className="text-xs font-semibold">
                           calibrated confidence {Math.round(result.relation.confidence * 100)}%
                         </p>
                       </div>
                     )}
                     {result.sectionText && (
-                      <details className="text-sm opacity-80">
+                      <details className="text-sm">
                         <summary className="cursor-pointer font-semibold">Show source section</summary>
                         <p className="mt-1 whitespace-pre-wrap rounded-lg bg-black/5 p-2 font-mono text-xs leading-relaxed">
                           {result.sectionText}
@@ -288,7 +289,7 @@ export function CitationVerifier({
               </p>
             )}
             {openaiStatus === "pending" && <p className="text-sm font-medium text-secondary">Checking…</p>}
-            {openaiStatus === "error" && <p className="text-sm font-bold text-rose-700">That call failed. Try again.</p>}
+            {openaiStatus === "error" && <p className="text-sm font-bold text-rose-800">That call failed. Try again.</p>}
             {openaiStatus === "done" &&
               openaiOutcome?.ok &&
               (() => {
@@ -304,7 +305,7 @@ export function CitationVerifier({
                       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                         <span className="text-lg font-extrabold uppercase tracking-wide">{style.label}</span>
                         {relationAnswer.selfReportedConfidence != null && (
-                          <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-xs font-bold opacity-80">
+                          <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-xs font-bold">
                             self-reported {Math.round(relationAnswer.selfReportedConfidence * 100)}%
                           </span>
                         )}
@@ -312,7 +313,7 @@ export function CitationVerifier({
                     ) : (
                       <p className="text-sm text-muted">No relation answer returned.</p>
                     )}
-                    <p className="text-xs font-semibold opacity-75">
+                    <p className="text-xs font-semibold">
                       {Math.round(openaiOutcome.result.elapsedMs)} ms · {openaiOutcome.result.usage.input_tokens} in /{" "}
                       {openaiOutcome.result.usage.output_tokens} out tokens
                     </p>
@@ -327,16 +328,28 @@ export function CitationVerifier({
             </div>
             {result && result.status !== "missing" && (
               <EvaluationPanel
-                task="Citation verdict"
-                criteria={CITATION_CRITERIA}
-                input={claim}
-                context={result.sectionText ?? undefined}
-                typesafeOutput={
-                  result.relation
-                    ? `${result.verdict} (${result.relation.choice}, confidence ${Math.round(result.relation.confidence * 100)}%)`
-                    : result.verdict
+                kind="citation"
+                typesafePacket={buildCitationPacket({
+                  claim: lastRun?.claim ?? claim,
+                  quote: (lastRun?.quote ?? quote).trim() || null,
+                  verdict: result.verdict,
+                  relation: result.relation ? RELATION_LABELS[result.relation.choice] ?? result.relation.choice : null,
+                  sectionId: result.sectionId,
+                  sectionText: result.sectionText,
+                })}
+                typesafeSource={result.source}
+                openaiPacket={
+                  oaStyle
+                    ? buildCitationPacket({
+                        claim: lastRun?.claim ?? claim,
+                        quote: (lastRun?.quote ?? quote).trim() || null,
+                        verdict: oaStyle.verdict,
+                        relation: RELATION_LABELS[String(oaRelationAnswer?.value)] ?? String(oaRelationAnswer?.value),
+                        sectionId: result.sectionId,
+                        sectionText: result.sectionText,
+                      })
+                    : null
                 }
-                openaiOutput={oaStyle ? `${oaStyle.verdict} (${oaRelationAnswer ? String(oaRelationAnswer.value) : ""})` : null}
                 openaiConfigured={openaiConfigured}
               />
             )}

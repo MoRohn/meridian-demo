@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Landscape phones and other very short viewports, where vertical space is the scarce resource. */
+@custom-variant short (@media (max-height: 500px));
+
 :root {
   /* Warm, editorial law-firm palette: deep forest green + pale mint + a lime CTA accent. */
   --bg: #dbe3c5;
@@ -10,7 +13,7 @@
   --border-strong: #a3b285;
   --text: #0a1610;
   --text-secondary: #2a3826;
-  --text-muted: #5c6b53;
+  --text-muted: #526049;
 
   --deep: #071510;
   --deep-alt: #0b2013;

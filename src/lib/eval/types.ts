@@ -6,27 +6,43 @@
  * scoring whether that answer was actually good against a task-specific
  * rubric, with a written chain-of-thought reason. See eval-service/main.py.
  */
+export type EvalKind = "risk" | "compliance" | "citation" | "reply";
+
 export interface EvalRequest {
-  /** Which Meridian capability this judges — "Composite risk", "Compliance flags", "Citation verdict", "Chat reply", ... */
-  task: string;
+  /** Which Meridian capability this judges; selects the service's versioned rubric. */
+  kind: EvalKind;
   backend: "typesafe" | "openai";
-  /** The natural-language rubric G-Eval scores against. */
-  criteria: string;
+  /** What the system was asked — see src/lib/eval/packets.ts for the standardized formats. */
   input: string;
   actualOutput: string;
+  /** The source text the answer must be supported by. */
   context?: string;
+}
+
+export interface EvalIntegrity {
+  /** "suspicious" means text in the request looked like an attempt to steer the judge; the judge was told to ignore it, but a human should look. */
+  status: "clean" | "suspicious";
+  signals: { field: string; signal: string }[];
+  hiddenCharsRemoved: number;
 }
 
 export interface EvalResult {
   /** 0..1, G-Eval's own scale. */
   score: number;
-  /** The chain-of-thought explanation for the score — the actual point of running this. */
+  /** The judge's written explanation for the score. */
   reason: string;
-  /** Whether score cleared the service's success threshold (0.6). */
+  /** Whether score cleared the pass threshold. */
   success: boolean;
+  threshold: number;
   judgeModel: string;
+  /** Which versioned rubric graded this — scores are only comparable within one version. */
+  rubric: { id: string; version: string; title: string };
+  /** The fixed evaluation steps the judge scored against, verbatim. */
+  steps: string[];
+  integrity: EvalIntegrity;
+  latencyMs: number;
 }
 
 export type EvalOutcome =
   | { ok: true; result: EvalResult }
-  | { ok: false; reason: "not_configured" | "error"; message?: string };
+  | { ok: false; reason: "not_configured" | "error"; message?: string; /** Stable failure code from the eval service, e.g. "judge_rate_limited". */ code?: string };
