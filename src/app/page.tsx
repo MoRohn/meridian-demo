@@ -6,6 +6,10 @@ import { ChatConversation, type ChatMessage } from "@/components/ChatConversatio
 import { MobileNav, type MobileView } from "@/components/MobileNav";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { evalStore } from "@/lib/eval/store";
+import { buildReportDoc, reportFilename } from "@/lib/report/buildReport";
+import type { ReportFormat } from "@/lib/report/doc";
+import { renderReport } from "@/lib/report/formats";
+import { downloadBlob } from "@/lib/report/download";
 import { AppHeader } from "@/components/AppHeader";
 import { activityLog, type ActivityFinish, type ActivityKind } from "@/lib/activity/log";
 import { openaiActivityResult, typesafeActivityResult } from "@/lib/activity/outcomes";
@@ -586,6 +590,13 @@ export default function Home() {
   // "Expanded" is a desktop-only affordance; on small screens the document pane already has the whole screen.
   const documentFillsColumn = documentExpanded && isDesktop;
 
+  async function handleDownloadReport(format: ReportFormat) {
+    const at = Date.now();
+    const document = activeDocument ? { name: activeDocument.name, contractType: contractTypeLabel } : null;
+    const doc = buildReportDoc({ generatedAt: at, document, evals: evalStore.rows(), activities: activityLog.list(), trace });
+    downloadBlob(reportFilename(document, at, format), await renderReport(doc, format));
+  }
+
   const contextBar = (
     <section aria-label="Session context" className="flex min-w-0 items-center gap-x-3 gap-y-1.5 border-b border-border bg-surface px-4 py-2 text-sm short:hidden sm:gap-x-5 sm:py-2.5">
       <span className="hidden shrink-0 font-bold uppercase tracking-wide text-muted xl:inline">Context memory</span>
@@ -603,6 +614,7 @@ export default function Home() {
         typesafeLive={effectiveTypesafeLive}
         openaiConfigured={effectiveOpenaiConfigured}
         onOpenSettings={() => setSettingsOpen(true)}
+        onDownloadReport={handleDownloadReport}
       />
       <SettingsModal
         open={settingsOpen}

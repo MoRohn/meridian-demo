@@ -9,6 +9,14 @@ import type { EvalKind, EvalOutcome } from "./types";
  */
 export type Backend = "typesafe" | "openai";
 
+/** What one judge call was shown (minus the source text, which can be a whole contract), kept so a report can show the answer behind a score. */
+export interface EvaluatedPacket {
+  input: string;
+  actualOutput: string;
+  /** Length of the source text the answer was judged against. */
+  contextChars: number;
+}
+
 export interface StoredEvaluation {
   /** Fingerprint of the exact answer that was judged, so a changed answer is never shown a stale score. */
   sig: string;
@@ -18,6 +26,8 @@ export interface StoredEvaluation {
   auto: boolean;
   /** Which capability was judged, so results can be grouped across surfaces (the risk tab and its excerpt share one kind). */
   kind?: EvalKind;
+  /** The request and answer the judge scored. */
+  packet?: EvaluatedPacket;
 }
 
 export interface StoredEvaluationRow extends StoredEvaluation {

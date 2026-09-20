@@ -346,11 +346,12 @@ export function EvaluationPanel({
     for (const side of runnable) {
       const sig = sigOf(side);
       const packet = side.packet!;
-      evalStore.set(scope, side.backend, { sig, outcome: null, pending: true, auto, kind });
+      const snapshot = { input: packet.input, actualOutput: packet.actualOutput, contextChars: packet.context?.length ?? 0 };
+      evalStore.set(scope, side.backend, { sig, outcome: null, pending: true, auto, kind, packet: snapshot });
       // Each judge call is its own activity with its own timer, so it starts from zero whatever else is running.
       const activityId = activityLog.begin("judge", "evaluation", `${copy.title}: ${side.name}`);
       runEvaluation({ kind, backend: side.backend, input: packet.input, actualOutput: packet.actualOutput, context: packet.context }).then((outcome) => {
-        evalStore.set(scope, side.backend, { sig, outcome, pending: false, auto, kind });
+        evalStore.set(scope, side.backend, { sig, outcome, pending: false, auto, kind, packet: snapshot });
         activityLog.finish(
           activityId,
           outcome.ok

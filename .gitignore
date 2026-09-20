@@ -50,3 +50,6 @@ eval-service/golden/last_report.json
 eval-service/golden/last_rejections.json
 .coverage
 eval-service/.coverage
+
+# saved evaluation reports (Download report output)
+/reports/

@@ -1,9 +1,11 @@
 "use client";
 
 import { elapsedOf, formatElapsed, type ActivityActor } from "@/lib/activity/log";
-import { useCurrentActivity, useNow } from "@/lib/activity/hooks";
+import { useActivities, useCurrentActivity, useNow } from "@/lib/activity/hooks";
 import { Icon } from "./Icon";
 import { ThemeControl } from "./ThemeControl";
+import { ReportMenu } from "./ReportMenu";
+import type { ReportFormat } from "@/lib/report/doc";
 
 /**
  * One model's timer. It shows the call running right now on that model, from zero, and when nothing is running the last
@@ -76,11 +78,15 @@ export function AppHeader({
   typesafeLive,
   openaiConfigured,
   onOpenSettings,
+  onDownloadReport,
 }: {
   typesafeLive: boolean;
   openaiConfigured: boolean;
   onOpenSettings: () => void;
+  onDownloadReport: (format: ReportFormat) => Promise<void>;
 }) {
+  // Every evaluation is also a logged judge call, so "nothing logged yet" means there is nothing to report.
+  const hasActivity = useActivities().length > 0;
   return (
     <header className="flex items-center justify-between gap-x-3 border-b border-border bg-surface px-3 py-2 sm:px-5 sm:py-3 short:py-1.5">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -128,6 +134,7 @@ export function AppHeader({
           inactiveText="The independent DeepEval judge"
         />
         <ThemeControl />
+        <ReportMenu disabled={!hasActivity} onDownload={onDownloadReport} />
         <button
           onClick={onOpenSettings}
           title="API keys"
