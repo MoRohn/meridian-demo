@@ -8,7 +8,7 @@
 export interface OpenAIFieldAnswer {
   /** The raw value the model chose for this question (a Choice option, a Score level index, or a boolean). */
   value: string | number | boolean;
-  /** Self-reported by the model in the same tool call — NOT independently calibrated. See README. */
+  /** Self-reported by the model in the same tool call — NOT independently calibrated. See docs/architecture.md. */
   selfReportedConfidence: number | null;
 }
 

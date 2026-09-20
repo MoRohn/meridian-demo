@@ -7,7 +7,7 @@ judgment layered on top of whatever TypeSafe and OpenAI already answered. Scores
 answer is correct and supported by the source text, not how confident the answering model was.
 
 It has to be a separate service because DeepEval is Python-only. `src/app/api/evaluate/route.ts`
-proxies to it server-to-server.
+proxies to it server-to-server. For how the app uses the service, see [`docs/evaluation.md`](../docs/evaluation.md).
 
 ## Running it
 

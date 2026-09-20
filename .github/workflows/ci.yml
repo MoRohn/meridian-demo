@@ -18,7 +18,7 @@ jobs:
       - run: npm ci
       # Next generates the global route types (LayoutProps and friends) itself; a fresh checkout has none yet.
       - run: npx next typegen
-      - run: npx tsc --noEmit
+      - run: npm run typecheck
       - run: npm run lint
       - run: npm test
       - run: npm run build

@@ -4,10 +4,9 @@ import { createSession, type SessionState } from "../orchestrator/state";
  * In-memory, process-local session store. This is intentionally the
  * simplest thing that works for a demo running one dev/preview instance —
  * swap this module for a Redis or DynamoDB-backed store behind the same
- * three functions to run this multi-instance in production (see README's
- * "Taking this to production" section). Everything upstream (the
- * orchestrator, the API route) only depends on this file's exports, so that
- * swap touches nothing else.
+ * three functions to run this multi-instance in production (see
+ * docs/production.md). Everything upstream (the orchestrator, the API route)
+ * only depends on this file's exports, so that swap touches nothing else.
  */
 const sessions = new Map<string, SessionState>();
 
