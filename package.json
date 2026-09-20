@@ -9,10 +9,18 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "node e2e/smoke.mjs",
+    "test:e2e:report": "node e2e/report.mjs",
+    "check:report": "node e2e/check-report.mjs",
+    "eval-service": "node scripts/eval-service.mjs start",
+    "eval-service:setup": "node scripts/eval-service.mjs setup"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0",
+    "docx": "^9.7.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "mammoth": "^1.12.3",
     "next": "16.3.5",
     "pdf-parse": "^1.1.1",
@@ -25,8 +33,10 @@
     "@types/pdf-parse": "^1.1.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "axe-core": "^4.13.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "playwright-core": "^1.63.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.11"

@@ -8,7 +8,7 @@ const OPENAI_MODELS_URL = "https://api.openai.com/v1/models";
 
 /**
  * Fired right after the Settings modal saves a key, so the header pills can
- * flip to "Live" the moment a key is confirmed to actually work — not just
+ * flip to "Live" the moment a key is confirmed to actually work not just
  * present. Each check is the cheapest possible authenticated round trip
  * (list models), never a real Jev / chat-completion call, so saving
  * a key doesn't burn a real judgment just to prove it's valid.

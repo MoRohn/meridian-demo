@@ -1,5 +1,8 @@
 import type { ContextStats } from "@/lib/orchestrator/run";
+import { useState } from "react";
 import { formatBytes } from "@/lib/formatBytes";
+import { useMediaQuery } from "@/lib/useMediaQuery";
+import { Icon } from "./Icon";
 
 export interface BackendContextMetrics {
   /** Which action produced this reading — "Analyze this contract", "Excerpt scan", "Citation check", ... */
@@ -55,26 +58,44 @@ export function ContextMeter({
   typesafeMetrics: BackendContextMetrics | null;
   openaiMetrics: BackendContextMetrics | null;
 }) {
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  const [manual, setManual] = useState<boolean | null>(null);
+  const hasDetail = Boolean(typesafeMetrics || openaiMetrics);
+  // Open by default where there is room; a phone keeps the one-line summary until asked.
+  const open = hasDetail && (manual ?? isDesktop);
+
   return (
-    <div className="space-y-1 border-b border-border bg-elevated/60 px-4 py-1.5 text-xs">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="shrink-0 font-bold uppercase tracking-wide text-muted">Context window</span>
-        {stats ? (
-          <>
-            <Stat
-              label="memory:"
-              value={`${stats.historyTurnsIncluded}/${stats.historyTurnsTotal} turn${stats.historyTurnsTotal === 1 ? "" : "s"}${
-                stats.historyTurnsIncluded >= stats.historyTurnsTotal ? "" : " (trimmed)"
-              }`}
-            />
-            <Stat label="document:" value={stats.documentBytes > 0 ? formatBytes(stats.documentBytes) : "none loaded"} />
-          </>
-        ) : (
-          <span className="text-muted">Send a message to measure it.</span>
+    <div className="border-b border-border bg-elevated/60 px-4 py-1.5 text-xs short:hidden">
+      <div className="flex items-center gap-x-4">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
+          <span className="shrink-0 font-bold uppercase tracking-wide text-muted">Context window</span>
+          {stats ? (
+            <>
+              <Stat
+                label="memory:"
+                value={`${stats.historyTurnsIncluded}/${stats.historyTurnsTotal} turn${stats.historyTurnsTotal === 1 ? "" : "s"}${
+                  stats.historyTurnsIncluded >= stats.historyTurnsTotal ? "" : " (trimmed)"
+                }`}
+              />
+              <Stat label="document:" value={stats.documentBytes > 0 ? formatBytes(stats.documentBytes) : "none loaded"} />
+            </>
+          ) : (
+            <span className="text-muted">Send a message to measure it.</span>
+          )}
+        </div>
+        {hasDetail && (
+          <button
+            onClick={() => setManual(!open)}
+            aria-expanded={open}
+            aria-label={open ? "Hide per-model usage" : "Show per-model usage"}
+            className="-my-1.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-surface-hover hover:text-deep lg:hidden"
+          >
+            <Icon name="chevron" size={14} className={open ? "rotate-180" : ""} />
+          </button>
         )}
       </div>
-      {(typesafeMetrics || openaiMetrics) && (
-        <div className="space-y-0.5">
+      {open && (
+        <div className="mt-1 space-y-0.5">
           <BackendRow name="TypeSafe" metrics={typesafeMetrics} />
           <BackendRow name="OpenAI" metrics={openaiMetrics} />
         </div>

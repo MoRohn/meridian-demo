@@ -1,9 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DocumentPanel } from "@/components/DocumentPanel";
 import { ChatConversation, type ChatMessage } from "@/components/ChatConversation";
-import { AppHeader, type BackendActivity } from "@/components/AppHeader";
+import { MobileNav, type MobileView } from "@/components/MobileNav";
+import { useMediaQuery } from "@/lib/useMediaQuery";
+import { evalStore } from "@/lib/eval/store";
+import { buildReportDoc, reportFilename } from "@/lib/report/buildReport";
+import type { ReportFormat } from "@/lib/report/doc";
+import { renderReport } from "@/lib/report/formats";
+import { downloadBlob } from "@/lib/report/download";
+import { AppHeader } from "@/components/AppHeader";
+import { activityLog, type ActivityFinish, type ActivityKind } from "@/lib/activity/log";
+import { openaiActivityResult, typesafeActivityResult } from "@/lib/activity/outcomes";
 import { Workspace, type WorkspaceTab } from "@/components/Workspace";
 import { ReasoningTrace } from "@/components/ReasoningTrace";
 import { RiskDashboard } from "@/components/RiskDashboard";
@@ -13,7 +22,7 @@ import type { TraceEntry, ComplianceFlag, ContextStats } from "@/lib/orchestrato
 import { ContextMeter, type BackendContextMetrics } from "@/components/ContextMeter";
 import type { CompositeRisk } from "@/lib/skills/clauseRisk";
 import type { CitationCheckResult } from "@/lib/skills/citationVerifier";
-import type { OpenAIRunOutcome } from "@/lib/openai/types";
+import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
 import { CONTRACT_TYPES } from "@/lib/skills/contractType";
 import { TYPESAFE_PRICING, usdForTokens, type SessionTotals } from "@/lib/compare/pricing";
 import { matchReferencePrice } from "@/lib/compare/openaiEquivalent";
@@ -63,7 +72,13 @@ export default function Home() {
   const [documentExpanded, setDocumentExpanded] = useState(false);
 
   const [trace, setTrace] = useState<TraceEntry[]>([]);
+  /** Which pane is showing below the lg breakpoint; the two-column desktop layout ignores it. */
+  const [mobileView, setMobileView] = useState<MobileView>("assistant");
+  const [seenVersions, setSeenVersions] = useState({ analysis: 0, assistant: 0 });
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [traceSource, setTraceSource] = useState<"live" | "mock">("mock");
+  /** The judgments the last chat reply was composed from (not scope-filtered), so the reply can be checked against them. */
+  const [lastJudgments, setLastJudgments] = useState<{ risk: CompositeRisk | null; flags: ComplianceFlag[] } | null>(null);
   const [risk, setRisk] = useState<CompositeRisk | null>(null);
   const [complianceFlags, setComplianceFlags] = useState<ComplianceFlag[]>([]);
   /** Whatever chat message most recently produced the Trace tab's content — re-run by the Trace tab's retry button. */
@@ -77,6 +92,8 @@ export default function Home() {
   const [openaiMetrics, setOpenaiMetrics] = useState<BackendContextMetrics | null>(null);
 
   const [openaiOutcome, setOpenaiOutcome] = useState<OpenAIRunOutcome | null>(null);
+  /** The reply Meridian composed from OpenAI's answers to the latest chat turn, so OpenAI's reply can be evaluated like TypeSafe's. */
+  const [openaiTurn, setOpenaiTurn] = useState<OpenAITurn | null>(null);
   const [openaiConfigured, setOpenaiConfigured] = useState(false);
 
   // Highlighted-excerpt analysis — scoped separately from the whole-document
@@ -86,47 +103,27 @@ export default function Home() {
   const [selectedExcerpt, setSelectedExcerpt] = useState<string | null>(null);
   const [excerptStatus, setExcerptStatus] = useState<"idle" | "pending" | "done" | "error">("idle");
   const [excerptRisk, setExcerptRisk] = useState<CompositeRisk | null>(null);
+  /** Whether the highlighted-excerpt TypeSafe answer came from the live model or the local demo heuristic. */
+  const [excerptSource, setExcerptSource] = useState<"live" | "mock" | null>(null);
   const [excerptComplianceFlags, setExcerptComplianceFlags] = useState<ComplianceFlag[]>([]);
   const [excerptOaOutcome, setExcerptOaOutcome] = useState<OpenAIRunOutcome | null>(null);
 
   const [sessionTotals, setSessionTotals] = useState<SessionTotals>(emptyTotals);
 
-  // The header's timers reflect whichever activity is CURRENTLY or MOST
-  // RECENTLY running on each backend, from any task — a chat turn, a
-  // citation check, or a highlighted-excerpt analysis — not just the last
-  // chat turn. Kept separate from the chat-specific trace/outcome state
-  // below, since an excerpt or citation check's OpenAI answers have nothing
-  // to do with the chat fan-out's per-question table and must never
-  // overwrite it.
-  const [headerTypesafe, setHeaderTypesafe] = useState<BackendActivity>({ status: "idle", elapsedMs: null });
-  const [headerOpenai, setHeaderOpenai] = useState<BackendActivity>({ status: "idle", elapsedMs: null });
-
-  /**
-   * Three independent flows (a chat turn, an excerpt scan, a citation check)
-   * can all be in flight at once and all report to these same two pills.
-   * Without this guard, an OLDER run's "done" can arrive after a NEWER run's
-   * "pending" and stomp it — the pill freezes on a stale elapsed time while
-   * the real, newer call is still running, or shows the wrong number when it
-   * finishes. Each `begin*` call stakes a claim on the current epoch;
-   * `finish*` only applies if nothing newer has started since.
-   */
-  const typesafeEpoch = useRef(0);
-  const openaiEpoch = useRef(0);
-  function beginTypesafeActivity(): number {
-    const epoch = ++typesafeEpoch.current;
-    setHeaderTypesafe({ status: "pending", elapsedMs: null });
-    return epoch;
+  // Every model call is its own record in the activity log (src/lib/activity/log.ts), with its own start time. The header
+  // timers, the activity windows and the activity trace all read from it, so each action starts a fresh timer from zero
+  // and a slow older call finishing late can only ever update its own record, never a newer action's timer.
+  function beginTypesafeActivity(kind: ActivityKind, label: string): number {
+    return activityLog.begin("typesafe", kind, label);
   }
-  function finishTypesafeActivity(epoch: number, activity: BackendActivity) {
-    if (epoch === typesafeEpoch.current) setHeaderTypesafe(activity);
+  function finishTypesafeActivity(id: number, result: ActivityFinish) {
+    activityLog.finish(id, result);
   }
-  function beginOpenaiActivity(): number {
-    const epoch = ++openaiEpoch.current;
-    setHeaderOpenai({ status: "pending", elapsedMs: null });
-    return epoch;
+  function beginOpenaiActivity(kind: ActivityKind, label: string): number {
+    return activityLog.begin("openai", kind, label);
   }
-  function finishOpenaiActivity(epoch: number, activity: BackendActivity) {
-    if (epoch === openaiEpoch.current) setHeaderOpenai(activity);
+  function finishOpenaiActivity(id: number, result: ActivityFinish) {
+    activityLog.finish(id, result);
   }
 
   const [uploading, setUploading] = useState(false);
@@ -202,9 +199,10 @@ export default function Home() {
   async function handleSend(text: string, scope: "all" | "risk" | "compliance" = "all") {
     setMessages((m) => [...m, { role: "user", text }]);
     setLastMessage(text);
+    setOpenaiTurn(null); // never pair a new TypeSafe reply with OpenAI's reply to the previous message
     setSending(true);
-    const tsEpoch = beginTypesafeActivity();
-    const oaEpoch = openaiConfigured ? beginOpenaiActivity() : null;
+    const tsEpoch = beginTypesafeActivity("chat", text);
+    const oaEpoch = openaiConfigured ? beginOpenaiActivity("chat", text) : null;
 
     const chatPromise = callApi({
       action: "message",
@@ -228,6 +226,7 @@ export default function Home() {
         setLastReply(result.reply);
         setTrace(result.trace);
         setTraceSource(result.source);
+        setLastJudgments({ risk: result.risk, flags: result.complianceFlags ?? [] });
         // A tab's own action button only ever touches that tab's state — the
         // Risk rerun never silently updates Compliance's flags and vice
         // versa, even though one fan-out call computes both under the hood.
@@ -240,7 +239,7 @@ export default function Home() {
           inputTokens: result.usage.input_tokens,
           outputTokens: result.usage.output_tokens,
         });
-        finishTypesafeActivity(tsEpoch, { status: "done", elapsedMs: result.elapsedMs });
+        finishTypesafeActivity(tsEpoch, typesafeActivityResult(result.source, result.elapsedMs, result.usage));
         setLive(Boolean(data.live));
         setOpenaiConfigured(Boolean(data.openaiConfigured));
         setContextFacts(data.session?.contextFacts ?? {});
@@ -262,7 +261,7 @@ export default function Home() {
         }));
       })
       .catch((err) => {
-        finishTypesafeActivity(tsEpoch, { status: "error", elapsedMs: null });
+        finishTypesafeActivity(tsEpoch, { status: "error", note: (err as Error).message });
         setMessages((m) => [...m, { role: "assistant", text: `Error: ${(err as Error).message}` }]);
       })
       .finally(() => setSending(false));
@@ -275,11 +274,11 @@ export default function Home() {
             body: JSON.stringify({ sessionId, message: text, override: oaOverride }),
           })
             .then((r) => r.json())
-            .then((data: { outcome: OpenAIRunOutcome }) => {
+            .then((data: { outcome: OpenAIRunOutcome; turn?: OpenAITurn | null }) => {
               const outcome = data.outcome;
               setOpenaiOutcome(outcome);
-              const status = outcome?.ok || outcome?.reason === "not_configured" ? "done" : "error";
-              finishOpenaiActivity(oaEpoch, { status, elapsedMs: outcome?.ok ? outcome.result.elapsedMs : null });
+              setOpenaiTurn(data.turn ?? null);
+              finishOpenaiActivity(oaEpoch, openaiActivityResult(outcome));
               if (outcome?.ok) {
                 const result = outcome.result;
                 setOpenaiMetrics({
@@ -303,8 +302,8 @@ export default function Home() {
                 }));
               }
             })
-            .catch(() => {
-              finishOpenaiActivity(oaEpoch, { status: "error", elapsedMs: null });
+            .catch((err) => {
+              finishOpenaiActivity(oaEpoch, { status: "error", note: (err as Error).message });
             })
         : Promise.resolve();
 
@@ -335,8 +334,8 @@ export default function Home() {
     }
 
     setExcerptStatus("pending");
-    const tsEpoch = beginTypesafeActivity();
-    const oaEpoch = openaiConfigured ? beginOpenaiActivity() : null;
+    const tsEpoch = beginTypesafeActivity("excerpt", "Excerpt scan");
+    const oaEpoch = openaiConfigured ? beginOpenaiActivity("excerpt", "Excerpt scan") : null;
 
     const tsPromise = fetch("/api/analyze-excerpt", {
       method: "POST",
@@ -347,6 +346,7 @@ export default function Home() {
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setExcerptRisk(data.risk);
+        setExcerptSource(data.source === "live" ? "live" : "mock");
         setExcerptComplianceFlags(data.complianceFlags ?? []);
         setExcerptStatus("done");
         setTypesafeMetrics({
@@ -355,11 +355,11 @@ export default function Home() {
           inputTokens: data.usage.input_tokens,
           outputTokens: data.usage.output_tokens,
         });
-        finishTypesafeActivity(tsEpoch, { status: "done", elapsedMs: data.elapsedMs });
+        finishTypesafeActivity(tsEpoch, typesafeActivityResult(data.source === "live" ? "live" : "mock", data.elapsedMs, data.usage));
       })
-      .catch(() => {
+      .catch((err) => {
         setExcerptStatus("error");
-        finishTypesafeActivity(tsEpoch, { status: "error", elapsedMs: null });
+        finishTypesafeActivity(tsEpoch, { status: "error", note: (err as Error).message });
       });
 
     const oaPromise =
@@ -373,7 +373,6 @@ export default function Home() {
             .then((data: { outcome: OpenAIRunOutcome }) => {
               const outcome = data.outcome;
               setExcerptOaOutcome(outcome);
-              const status = outcome?.ok || outcome?.reason === "not_configured" ? "done" : "error";
               if (outcome?.ok) {
                 setOpenaiMetrics({
                   task: "Excerpt scan",
@@ -382,9 +381,9 @@ export default function Home() {
                   outputTokens: outcome.result.usage.output_tokens,
                 });
               }
-              finishOpenaiActivity(oaEpoch, { status, elapsedMs: outcome?.ok ? outcome.result.elapsedMs : null });
+              finishOpenaiActivity(oaEpoch, openaiActivityResult(outcome));
             })
-            .catch(() => finishOpenaiActivity(oaEpoch, { status: "error", elapsedMs: null }))
+            .catch((err) => finishOpenaiActivity(oaEpoch, { status: "error", note: (err as Error).message }))
         : Promise.resolve();
 
     await Promise.all([tsPromise, oaPromise]);
@@ -401,6 +400,7 @@ export default function Home() {
   function handleRunExcerptAction(kind: "analyze" | "compliance") {
     if (!selectedExcerpt) return;
     setActiveTab(kind === "analyze" ? "risk" : "compliance");
+    selectMobileView("analysis");
     void handleSelectionChange(selectedExcerpt);
   }
 
@@ -435,6 +435,7 @@ export default function Home() {
         openaiOverride: oaOverride,
       });
       setActiveDocument(data.session.activeDocument);
+      setDocumentExpanded(true); // a document that has just been chosen or uploaded opens filling the left panel
       setContextFacts(data.session.contextFacts ?? {});
       setRisk(null);
       setComplianceFlags([]);
@@ -475,6 +476,7 @@ export default function Home() {
         openaiOverride: oaOverride,
       });
       setActiveDocument(data.session.activeDocument);
+      setDocumentExpanded(true); // a document that has just been chosen or uploaded opens filling the left panel
       setContextFacts(data.session.contextFacts ?? {});
       setRisk(null);
       setComplianceFlags([]);
@@ -512,17 +514,16 @@ export default function Home() {
       setRisk(null);
       setComplianceFlags([]);
       setOpenaiOutcome(null);
+      setOpenaiTurn(null);
+      evalStore.reset(); // a new session gets its first-time evaluations again
       setLastMessage(null);
       setLastReply(null);
       setContextStats(null);
       setTypesafeMetrics(null);
       setOpenaiMetrics(null);
-      // Bump both epochs so any still-in-flight request from before the
-      // reset can no longer write a stale "done"/"error" over this idle state.
-      typesafeEpoch.current += 1;
-      openaiEpoch.current += 1;
-      setHeaderTypesafe({ status: "idle", elapsedMs: null });
-      setHeaderOpenai({ status: "idle", elapsedMs: null });
+      // Clearing the log also orphans any still-in-flight call from before the reset: when it lands, its record is gone,
+      // so it can no longer write a stale "done"/"error" over this idle state.
+      activityLog.reset();
       setSelectedExcerpt(null);
       setExcerptStatus("idle");
       setExcerptRisk(null);
@@ -573,23 +574,49 @@ export default function Home() {
     return CONTRACT_TYPES[contextFacts.contractType as keyof typeof CONTRACT_TYPES] ?? contextFacts.contractType;
   }, [contextFacts.contractType]);
 
+  // A monotonic "something new" counter per pane; the dot shows while the pane's
+  // counter is ahead of what the reader last saw there.
+  const analysisVersion = sessionTotals.turns + (excerptStatus === "done" ? 1 : 0);
+  const assistantVersion = messages.length;
+  function selectMobileView(next: MobileView) {
+    setSeenVersions((seen) => ({
+      analysis: next === "analysis" || mobileView === "analysis" ? analysisVersion : seen.analysis,
+      assistant: next === "assistant" || mobileView === "assistant" ? assistantVersion : seen.assistant,
+    }));
+    setMobileView(next);
+  }
+  const mobileBadges = {
+    analysis: analysisVersion !== seenVersions.analysis,
+    assistant: assistantVersion !== seenVersions.assistant,
+  };
+  // "Expanded" is a desktop-only affordance; on small screens the document pane already has the whole screen.
+  const documentFillsColumn = documentExpanded && isDesktop;
+
+  async function handleDownloadReport(format: ReportFormat) {
+    const at = Date.now();
+    const document = activeDocument ? { name: activeDocument.name, contractType: contractTypeLabel } : null;
+    const doc = buildReportDoc({ generatedAt: at, document, evals: evalStore.rows(), activities: activityLog.list(), trace });
+    downloadBlob(reportFilename(document, at, format), await renderReport(doc, format));
+  }
+
   const contextBar = (
-    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border bg-surface px-4 py-2.5 text-sm sm:gap-x-5">
-      <span className="hidden shrink-0 font-bold uppercase tracking-wide text-muted sm:inline">Context memory</span>
+    <section aria-label="Session context" className="flex min-w-0 items-center gap-x-3 gap-y-1.5 border-b border-border bg-surface px-4 py-2 text-sm short:hidden sm:gap-x-5 sm:py-2.5">
+      <span className="hidden shrink-0 font-bold uppercase tracking-wide text-muted xl:inline">Context memory</span>
       <ContextFact label="doc" value={activeDocument ? activeDocument.name : "none loaded"} grow />
-      <ContextFact label="type" value={contractTypeLabel ?? "not yet classified"} />
+      <span className="hidden min-w-0 sm:flex">
+        <ContextFact label="type" value={contractTypeLabel ?? "not yet classified"} />
+      </span>
       <ContextFact label="turns" value={String(messages.length)} />
-    </div>
+    </section>
   );
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
+    <div className="flex h-dvh flex-col bg-background text-foreground">
       <AppHeader
         typesafeLive={effectiveTypesafeLive}
-        typesafeActivity={headerTypesafe}
         openaiConfigured={effectiveOpenaiConfigured}
-        openaiActivity={headerOpenai}
         onOpenSettings={() => setSettingsOpen(true)}
+        onDownloadReport={handleDownloadReport}
       />
       <SettingsModal
         open={settingsOpen}
@@ -598,9 +625,13 @@ export default function Home() {
         onSave={handleSaveSettings}
       />
       {contextBar}
-      <div className="grid min-w-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-border md:border-r">
-          <div className={`min-h-0 overflow-hidden border-b border-border ${documentExpanded ? "flex-1" : "flex-[0_0_55%]"}`}>
+      <main className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+        <div className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-border lg:flex lg:border-r ${mobileView === "analysis" ? "hidden" : "flex"}`}>
+          <div
+            className={`min-h-0 overflow-hidden border-border lg:block lg:border-b ${
+              mobileView === "document" ? "block flex-1" : "hidden"
+            } ${documentFillsColumn ? "lg:flex-1" : "lg:flex-[0_0_55%]"}`}
+          >
             <DocumentPanel
               document={activeDocument}
               activeDocumentId={activeDocument?.id ?? null}
@@ -611,23 +642,23 @@ export default function Home() {
               onReset={handleReset}
               selectedExcerpt={selectedExcerpt}
               onSelectionChange={handleSelectionChange}
-              expanded={documentExpanded}
+              expanded={documentFillsColumn}
               onToggleExpand={() => setDocumentExpanded((e) => !e)}
             />
           </div>
           {/* The chat input stays usable no matter what — only the message history collapses while the document is expanded. */}
-          <div className={documentExpanded ? "shrink-0" : "min-h-0 flex-1 overflow-hidden"}>
+          <div className={`lg:block ${mobileView === "assistant" ? "block" : "hidden"} ${documentFillsColumn ? "shrink-0" : "min-h-0 flex-1 overflow-hidden"}`}>
             <ChatConversation
               messages={messages}
               onSend={handleSend}
               sending={sending}
-              compact={documentExpanded}
+              compact={documentFillsColumn}
               selectedExcerpt={selectedExcerpt}
               onRunExcerptAction={handleRunExcerptAction}
             />
           </div>
         </div>
-        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex ${mobileView === "analysis" ? "flex" : "hidden"}`}>
           <ContextMeter stats={contextStats} typesafeMetrics={typesafeMetrics} openaiMetrics={openaiMetrics} />
           <Workspace
             active={activeTab}
@@ -639,12 +670,13 @@ export default function Home() {
                     source={traceSource}
                     openaiOutcome={openaiOutcome}
                     openaiConfigured={openaiConfigured}
-                    sessionTotals={sessionTotals}
                     onRerun={lastMessage ? handleRerunTrace : undefined}
                     rerunPending={sending}
                     lastMessage={lastMessage}
                     lastReply={lastReply}
                     documentText={activeDocument?.text}
+                    judgments={lastJudgments}
+                    openaiTurn={openaiTurn}
                   />
                 ),
                 risk: (
@@ -657,6 +689,8 @@ export default function Home() {
                     selectedExcerpt={selectedExcerpt}
                     excerptStatus={excerptStatus}
                     excerptRisk={excerptRisk}
+                    typesafeSource={traceSource}
+                    excerptTypesafeSource={excerptSource}
                     excerptOpenaiOutcome={excerptOaOutcome}
                     onRerun={handleRerunRisk}
                     rerunPending={selectedExcerpt ? excerptStatus === "pending" : sending}
@@ -671,6 +705,8 @@ export default function Home() {
                     openaiConfigured={openaiConfigured}
                     selectedExcerpt={selectedExcerpt}
                     excerptStatus={excerptStatus}
+                    typesafeSource={traceSource}
+                    excerptTypesafeSource={excerptSource}
                     excerptFlags={excerptComplianceFlags}
                     excerptOpenaiOutcome={excerptOaOutcome}
                     onRerun={handleRerunCompliance}
@@ -679,6 +715,9 @@ export default function Home() {
                 ),
                 citation: (
                   <CitationVerifier
+                    sessionId={sessionId}
+                    documentName={activeDocument?.name}
+                    documentText={activeDocument?.text}
                     onVerify={handleVerifyCitation}
                     openaiConfigured={openaiConfigured}
                     onBeginTypesafeActivity={beginTypesafeActivity}
@@ -693,7 +732,8 @@ export default function Home() {
               }}
             />
         </div>
-      </div>
+      </main>
+      <MobileNav active={mobileView} onChange={selectMobileView} badges={mobileBadges} />
     </div>
   );
 }
@@ -704,7 +744,7 @@ function ContextFact({ label, value, grow }: { label: string; value: string; gro
       <span className="shrink-0 text-muted">{label}:</span>
       <span
         title={value}
-        className={`truncate font-bold text-foreground ${grow ? "max-w-[8rem] sm:max-w-[14rem] md:max-w-[22rem]" : "max-w-[8rem]"}`}
+        className={`truncate font-bold text-foreground ${grow ? "max-w-[8rem] sm:max-w-[14rem] md:max-w-[22rem]" : "max-w-[11rem] sm:max-w-[16rem] lg:max-w-[30rem]"}`}
       >
         {value}
       </span>

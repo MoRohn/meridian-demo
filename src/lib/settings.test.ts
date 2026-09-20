@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoEvaluateEnabled,
   DEFAULT_OPENAI_MODEL,
   DEFAULT_TYPESAFE_MODEL,
   loadSettings,
@@ -14,6 +15,7 @@ describe("typesafeOverride / openaiOverride", () => {
     typesafeModel: DEFAULT_TYPESAFE_MODEL,
     openaiApiKey: "",
     openaiModel: DEFAULT_OPENAI_MODEL,
+    autoEvaluate: true,
   };
 
   it("returns undefined when no key is set, regardless of the model field", () => {
@@ -46,5 +48,23 @@ describe("loadSettings (server/SSR context)", () => {
     expect(settings.openaiModel).toBe(DEFAULT_OPENAI_MODEL);
     expect(settings.typesafeApiKey).toBe("");
     expect(settings.openaiApiKey).toBe("");
+  });
+});
+
+describe("autoEvaluateEnabled", () => {
+  const base: ApiKeySettings = { typesafeApiKey: "", typesafeModel: DEFAULT_TYPESAFE_MODEL, openaiApiKey: "", openaiModel: DEFAULT_OPENAI_MODEL, autoEvaluate: true };
+
+  it("is on by default", () => {
+    expect(autoEvaluateEnabled(base)).toBe(true);
+  });
+  it("can be turned off", () => {
+    expect(autoEvaluateEnabled({ ...base, autoEvaluate: false })).toBe(false);
+  });
+  it("counts settings saved before the option existed as on, so upgrading never silently disables it", () => {
+    const legacy = { typesafeApiKey: "", typesafeModel: "m", openaiApiKey: "", openaiModel: "m" } as unknown as ApiKeySettings;
+    expect(autoEvaluateEnabled(legacy)).toBe(true);
+  });
+  it("is on when there is no browser at all (server render)", () => {
+    expect(autoEvaluateEnabled()).toBe(true);
   });
 });

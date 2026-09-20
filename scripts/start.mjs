@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * A small, branded wrapper around `next dev` so `npm run meridian` gives a
+ * Wrapper around `next dev` so `npm run meridian` gives a
  * clean, predictable startup: a fixed port (fails loudly instead of
  * silently hopping to another one when it's taken), a real `meridian.local`
  * URL once it's set up (falling back to localhost with clear one-time setup
@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
 import dns from "node:dns/promises";
+import { isPortFree as isServicePortFree, isSetUp as evalServiceIsSetUp, SERVICE_PORT, startEvalService } from "./eval-service.mjs";
 
 const PORT = Number(process.env.PORT || 3000);
 const PREFERRED_HOST = process.env.HOST || "meridian.local";
@@ -41,7 +42,7 @@ function openBrowser(url) {
   try {
     spawn(cmd, args, { shell: platform === "win32", stdio: "ignore", detached: true }).unref();
   } catch {
-    // Non-fatal — the banner already printed the URL to open by hand.
+    // Non-fatal. the banner already printed the URL to open by hand.
   }
 }
 
@@ -94,11 +95,27 @@ async function main() {
   console.log(`  Starting on ${url} ...`);
 
   // Bind on all interfaces (Next's default) so it answers to localhost,
-  // 127.0.0.1, AND meridian.local alike — only the URL we print/open differs.
+  // 127.0.0.1, AND meridian.local alike only the URL we print/open differs.
   const child = spawn("npx", ["next", "dev", "-p", String(PORT)], {
     stdio: "inherit",
     shell: process.platform === "win32",
   });
+
+  // The evaluation service is optional infrastructure, but the Evaluate buttons need it, so start it alongside the app
+  // when it has been set up. MERIDIAN_EVAL=0 skips this; a remote EVAL_SERVICE_URL means it is not ours to start.
+  let evalChild = null;
+  const remoteEval = process.env.EVAL_SERVICE_URL && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(process.env.EVAL_SERVICE_URL);
+  if (process.env.MERIDIAN_EVAL !== "0" && !remoteEval) {
+    if (!evalServiceIsSetUp()) {
+      console.log("  Evaluations are off: the evaluation service isn't installed. To enable them, run once:");
+      console.log("    npm run eval-service:setup\n");
+    } else if (!(await isServicePortFree(SERVICE_PORT))) {
+      console.log(`  Evaluation service: already running on port ${SERVICE_PORT}.\n`);
+    } else {
+      evalChild = startEvalService({ output: "prefixed" });
+      console.log(`  Evaluation service: starting on port ${SERVICE_PORT}.\n`);
+    }
+  }
 
   waitUntilReady(url).then((ready) => {
     if (ready) {
@@ -109,9 +126,16 @@ async function main() {
     }
   });
 
-  child.on("exit", (code) => process.exit(code ?? 0));
-  process.on("SIGINT", () => child.kill("SIGINT"));
-  process.on("SIGTERM", () => child.kill("SIGTERM"));
+  const stopAll = (signal) => {
+    evalChild?.kill(signal);
+    child.kill(signal);
+  };
+  child.on("exit", (code) => {
+    evalChild?.kill("SIGTERM");
+    process.exit(code ?? 0);
+  });
+  process.on("SIGINT", () => stopAll("SIGINT"));
+  process.on("SIGTERM", () => stopAll("SIGTERM"));
 }
 
 main();

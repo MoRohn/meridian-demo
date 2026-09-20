@@ -1,5 +1,5 @@
 import type { QuestionSpec } from "../typesafe/types";
-import { OPENAI_REFERENCE_PRICING } from "./pricing";
+import { OPENAI_REFERENCE_PRICING, usdForTokens } from "./pricing";
 
 /**
  * Mechanically translates the SAME question map the orchestrator sent to
@@ -79,4 +79,10 @@ export function buildFunctionCallingSchema(questions: Record<string, QuestionSpe
 export function matchReferencePrice(modelName: string) {
   const hit = OPENAI_REFERENCE_PRICING.find((p) => modelName.startsWith(p.model.split(" ")[0]));
   return hit ?? OPENAI_REFERENCE_PRICING[0];
+}
+
+/** What one OpenAI call cost, from its measured token usage at the closest published price. */
+export function openaiCostUsd(modelName: string, usage: { input_tokens: number; output_tokens: number }): number {
+  const price = matchReferencePrice(modelName);
+  return usdForTokens(usage.input_tokens, price.inputPerMillionUsd) + usdForTokens(usage.output_tokens, price.outputPerMillionUsd);
 }

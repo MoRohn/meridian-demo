@@ -27,6 +27,19 @@ silently hopping to another port if it's already taken, prints a clean banner, a
 the URL in your browser automatically once the server is actually ready. (`npm run dev`
 still works too, if you'd rather run plain `next dev`.)
 
+### Evaluations (optional)
+
+The **Evaluate** buttons need the DeepEval service in [`eval-service/`](eval-service/). One time:
+
+```bash
+npm run eval-service:setup     # creates eval-service/.venv and installs its requirements
+```
+
+After that `npm run meridian` starts the service alongside the app (`MERIDIAN_EVAL=0` skips it), or run it on its
+own with `npm run eval-service`. The judge uses the OpenAI key you save in Settings, or `OPENAI_API_KEY` for the
+service (see [`eval-service/README.md`](eval-service/README.md)). Without the service the app works as before; the
+evaluation panel says the service isn't running and offers **Check again**.
+
 **No API key is required to use the app.** Without `TYPESAFE_API_KEY` set, every call
 transparently falls back to a local heuristic mock evaluator (see
 [`src/lib/typesafe/mock.ts`](src/lib/typesafe/mock.ts)) that reproduces the exact same
@@ -71,6 +84,21 @@ isn't callable on a given key (a brand-new flagship's staged rollout, for exampl
 OpenAI client transparently retries once against `gpt-4o-mini` and reports the fallback in
 the UI rather than failing the whole comparison — see `OpenAINote` below.
 
+## Display brightness
+
+The sun/moon button in the header opens a five-level brightness slider (drag it, use the arrow keys, or pick a
+name). From brightest to darkest: **Bright** (one step brighter than the original), **Original** (the palette
+Meridian shipped with), **Default** (slightly darker than the original; what a new visitor sees), **Dark**, and
+**Darkest**. The whole UI follows: surfaces, text, status colors, the document page, and the fills for active tabs
+and buttons. The choice applies instantly, is remembered, and is applied before the first paint on your next visit,
+so there is no flash of the wrong palette.
+
+Each level's palette is defined in [`src/app/globals.css`](src/app/globals.css). [`src/lib/themePalette.test.ts`](src/lib/themePalette.test.ts)
+reads that file and checks every level: WCAG AA contrast for every text and surface pair (including status text on
+its tinted chips), that the levels get strictly darker in order, that "default" is only slightly darker than
+"original", and that "original" is still exactly the shipped palette. `npm run test:e2e` scans every level across every
+view with axe. When editing a palette, run those two first.
+
 ## What to click through
 
 1. **Load a sample contract** (top of the left panel) — a one-sided SaaS MSA, a balanced
@@ -101,7 +129,9 @@ the UI rather than failing the whole comparison — see `OpenAINote` below.
    (liability, indemnification, termination), combined with weights that live in
    application code, not a prompt.
 7. Check **Compliance** — four plain yes/no flags with their own probabilities.
-8. Try the **Citations** tab's canned examples — an accurate citation, one that's quoted
+8. Open **Citations** with a document loaded: it lists **suggested citations pulled from that document** (one per
+   recognisable clause type: renewal, indemnity, liability, termination, data, governing law and so on), each a typical claim
+   paired with the clause's own words. Clicking one runs the check against that clause. Then try the tab's playbook examples — an accurate citation, one that's quoted
    correctly but contradicted by its own source, one that's real but doesn't actually
    support the claim built on it, and one that's fabricated outright (never in the source
    at all — caught with zero model calls, by string match alone).
@@ -182,6 +212,12 @@ match (free, instant), then one `Choice` question only for quotes that survive i
 mirrors [the citation-check cookbook](https://docs.typesafe.ai/cookbooks/citation_check)
 and is called out in the docs as the correct exception, not the default.
 
+The loaded document is a citation source alongside the playbook: its clauses are split
+([`src/lib/citations/sections.ts`](src/lib/citations/sections.ts)) and keyed `Doc §N` (`Doc ¶N` for text without numbering),
+so a quote taken from it is located and judged against that clause. The suggestions
+([`suggest.ts`](src/lib/citations/suggest.ts)) are computed locally with keyword rules, with no model call and no cost until you
+click one; each quote is a verbatim slice of its clause, which a test asserts for every sample contract.
+
 ### Conversational context / memory
 
 [`src/lib/memory/session.ts`](src/lib/memory/session.ts) holds an in-memory,
@@ -251,23 +287,39 @@ state plainly rather than faking activity. Either way, the qualitative differenc
 ### A third, independent judgment: DeepEval
 
 Everything above measures TypeSafe's and OpenAI's own confidence in their own answers. That's not
-the same question as "was the answer actually good?" — for that, Meridian can call out to a small
-Python microservice ([`eval-service/`](eval-service/)) wrapping
-[DeepEval](https://github.com/confident-ai/deepeval)'s `GEval` metric: an LLM-as-judge that scores
-a given output against a natural-language rubric and writes out its own chain-of-thought reasoning
-for the score.
+the same question as "was the answer actually good?" For that, Meridian calls a small Python
+microservice ([`eval-service/`](eval-service/)) wrapping [DeepEval](https://github.com/confident-ai/deepeval)'s
+`GEval` metric: an LLM-as-judge that scores an answer against a versioned rubric and explains why.
 
-An **Evaluate** button appears wherever Meridian shows a judgment — the Trace tab's composed
-reply, Risk's composite score, Compliance's flag set, a Citation verdict — and scores *both*
-backends' answers independently against the same task-specific rubric, so the score and reasoning
-sit side by side just like everything else in this app. It's opt-in (a real LLM call, not
-free) and genuinely optional infrastructure: with the eval service not running, the button reports
-"eval service unreachable" instead of a score, the same honest treatment a missing `OPENAI_API_KEY`
-gets everywhere else. See [`eval-service/README.md`](eval-service/README.md) for how to run it.
+Every tab that shows a judgment has the same **evaluation panel**: a title and one-line subtitle
+saying what is being checked, then one card per backend with the metrics first (score, pass
+threshold, judge model, rubric version, latency) and the messages below them: the judge's verdict,
+any untrusted-content warning, the exact evidence the judge saw, and the fixed steps it followed.
 
-This has to live in a separate Python process — DeepEval is Python-only, and Meridian itself is
-TypeScript — proxied server-to-server through [`/api/evaluate`](src/app/api/evaluate/route.ts),
-the same pattern used for every other backend call in this app.
+What makes the score trustworthy, and what does not:
+
+- **Like-for-like.** Both backends' answers are rendered by the same packet builder
+  ([`src/lib/eval/packets.ts`](src/lib/eval/packets.ts)), with the scoring method and scale
+  definitions included so the judge can verify the arithmetic. Confidence is excluded on purpose.
+- **Reproducible.** The judge follows fixed, versioned steps, not steps it invents per call.
+- **Hardened against the document itself.** Contract text is sanitized, fenced as untrusted data,
+  and scanned for prompt-injection attempts; a suspicious document produces a visible warning.
+- **Both backends, including the chat reply.** OpenAI gets a reply of its own: the same composer that builds
+  TypeSafe's reply (`src/lib/orchestrator/compose.ts`) runs on OpenAI's answers to the same questions, so the two
+  replies differ only where the models' judgments differ, and each is checked against its own judgments. (OpenAI's
+  reply quotes no flag probability, because it has only a self-reported confidence, not a calibrated probability.)
+- **Never the demo heuristic.** Without a live TypeSafe key, answers come from a local keyword
+  heuristic. Those are not evaluated as if they were TypeSafe's; the panel says so.
+- **Measured, not assumed.** [`eval-service/golden/run_golden.py`](eval-service/golden/run_golden.py)
+  scores the judge itself against 27 known-answer cases, including injection attacks.
+
+**It evaluates itself the first time you open each action** (the Trace, Risk, Compliance and Citations panels, and the
+highlighted-excerpt scores), once per action per session, and only when it can work: the service is up, a judge key
+is available, and both backends' answers have arrived. Results are kept for the session, so switching tabs never
+re-runs (or re-bills) anything, and a changed answer waits for you to click **Re-evaluate**. Each run is real, paid
+judge calls with your OpenAI key, so **Settings has a switch to turn auto-evaluation off**. It is otherwise genuinely
+optional infrastructure: with the service not running, the panel says so and offers **Check again**. See
+[`eval-service/README.md`](eval-service/README.md).
 
 ## Mapping to the job description
 
@@ -279,7 +331,7 @@ the same pattern used for every other backend call in this app.
 | Explain AI architecture decisions and how components interact | The Trace, Risk, Compliance, and Citations tabs make the architecture visible at runtime, not just in this README |
 | Experience with Semantic Kernel / plugin-based AI frameworks | The skills registry is deliberately shaped like SK's plugin/function model — see "The skills/plugin architecture" above |
 | Experience with RAG, vector databases, embeddings | Citation verification is a RAG-shaped retrieve-then-judge pipeline; `src/lib/data/authorities.ts` stands in for a vector-store-backed retrieval step (swap the substring `locate()` in `citationVerifier.ts` for embedding search against a real corpus — the judgment step downstream doesn't change) |
-| AI evaluation, observability, model performance optimization | Every trace entry records which skill asked what, the full probability distribution, and whether the answer was actually used — the raw material for an eval harness; see also "Testing," below |
+| AI evaluation, observability, model performance optimization | Per-answer DeepEval judgments with versioned rubrics and an injection-hardened judge, a golden-set harness for the judge itself, and `/stats` + structured logs on the eval service; see "A third, independent judgment," above |
 | Deploy AI solutions in AWS or Azure | See "Taking this to production," below |
 
 ## Testing
@@ -310,11 +362,25 @@ assertions rather than eyeballing in the UI:
 - **Settings** (`src/lib/settings.ts`) — a blank/whitespace-only key never produces a
   usable override, and the module never throws when `window` doesn't exist (SSR).
 
-What's deliberately *not* covered here: React components and the API routes themselves —
-the components are thin rendering of already-tested data, and the routes are thin
-plumbing around already-tested functions (`handleTurn`, `verifyCitation`,
-`runOpenAIEquivalent`) plus one external HTTP call each. An end-to-end pass (Playwright
-against `npm run meridian`) would be the natural next layer for a real production build.
+`npm run test:e2e` drives the running app in a real browser (Chrome via `playwright-core`) at eight screen sizes, phone through
+1920px, checking layout, accessibility (axe), keyboard and dialog behavior, and touch-target sizes. It needs no API keys.
+
+`npm run test:e2e:report` checks **Download report** end to end: it populates Risk, Compliance and Citations through the real UI with the
+judge and OpenAI simulated at known scores, downloads the web page, PDF, Word and Markdown files, and checks their tables, explanations,
+characters, page layout and the menu's accessibility. Files and screenshots are written to `reports/` (gitignored). It needs no API keys.
+`npm run check:report -- <file>` validates a report you downloaded from your own session (.html, .pdf, .docx or .md): it is complete, the
+table agrees with the scoring sections, pass/fail agrees with the threshold and the band agrees with the score. It needs no keys and no
+running app, so a report produced by the real judge, with the keys saved in the Settings modal, can be checked directly.
+
+The eval service has its own suites: `pytest -q` in `eval-service/` covers validation, prompt construction, injection detection, and
+monitoring with the judge stubbed, and `python golden/run_golden.py` scores the real judge against known-answer cases (see
+[`eval-service/README.md`](eval-service/README.md)).
+
+What is not unit-tested: how React components render (there is no DOM test environment). That layer is covered
+instead by `npm run test:e2e` in a real browser, and the two API routes that carry real logic
+(`/api/evaluate`, `/api/compare-openai`) have their own tests with the external calls mocked. What no test here can
+cover is a live model: the local heuristic and stand-ins exercise the plumbing, and only a real key exercises the
+judge and the comparison with real OpenAI.
 
 ## Taking this to production
 

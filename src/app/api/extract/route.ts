@@ -12,14 +12,14 @@ import mammoth from "mammoth";
 // fixture file from its own test folder, which throws ENOENT when that
 // check misfires under a bundler. Using `require` (rather than a static
 // `import`) also sidesteps TypeScript trying to resolve types for that
-// untyped subpath — @types/pdf-parse only covers the package root.
+// untyped subpath @types/pdf-parse only covers the package root.
 const require = createRequire(import.meta.url);
 const pdf = require("pdf-parse/lib/pdf-parse.js") as (data: Buffer) => Promise<{ text: string }>;
 
 export const runtime = "nodejs";
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
-// Jev's request budget is ~32k tokens (state + longest question) — roughly
+// Jev's request budget is ~32k tokens (state + longest question) roughly
 // 150k characters of English text. Cap well under that so there's always
 // room left for the questions themselves.
 const MAX_TEXT_CHARS = 100_000;

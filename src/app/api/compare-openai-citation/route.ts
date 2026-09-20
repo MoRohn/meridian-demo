@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildRelationRequest } from "@/lib/skills/citationVerifier";
-import { AUTHORITY_SECTIONS } from "@/lib/data/authorities";
+import { citationSources } from "@/lib/citations/sources";
 import { runOpenAIEquivalent } from "@/lib/openai/client";
 import type { KeyOverride } from "@/lib/typesafe/client";
 
@@ -17,12 +17,12 @@ export const runtime = "nodejs";
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { claim?: string; quote?: string | null; sectionId?: string; override?: KeyOverride };
+    const body = (await req.json()) as { sessionId?: string; claim?: string; quote?: string | null; sectionId?: string; override?: KeyOverride };
     if (!body?.claim?.trim()) {
       return NextResponse.json({ error: "claim is required" }, { status: 400 });
     }
 
-    const request = buildRelationRequest(AUTHORITY_SECTIONS, body.claim.trim(), body.quote ?? null, body.sectionId);
+    const request = buildRelationRequest(citationSources(body.sessionId), body.claim.trim(), body.quote ?? null, body.sectionId);
     if (request.status === "missing") {
       // No section to compare against — same "no model call needed" logic
       // as the real check. Report as not_configured-shaped so the UI can

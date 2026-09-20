@@ -6,24 +6,22 @@ import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
 import { EvaluationPanel } from "./EvaluationPanel";
+import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
+import { buildCompliancePacket, type ComplianceDecision } from "@/lib/eval/packets";
+import { COMPLIANCE_CHECKS } from "@/lib/skills/complianceGuard";
 
-const COMPLIANCE_CRITERIA =
-  "Given the contract text in context, assess whether each compliance flag determination (flagged vs " +
-  "clear, with its stated probability) is correct and well-justified by what the text actually says.";
-
-function describeFlags(flags: ComplianceFlag[]): string {
-  if (flags.length === 0) return "No flags computed.";
-  return flags.map((f) => `${f.label}: ${f.flagged ? "FLAGGED" : "clear"} (${Math.round(f.probability * 100)}%)`).join("; ");
+/** Backend-neutral decisions for the evaluation packet. TypeSafe's come straight from the flags; OpenAI's from its boolean answers. */
+function typesafeDecisions(flags: ComplianceFlag[]): ComplianceDecision[] {
+  return flags.map((f) => ({ id: f.id, flagged: f.flagged }));
 }
 
-function describeOpenaiFlags(flags: ComplianceFlag[], openaiOutcome: OpenAIRunOutcome | null): string | null {
-  const parts: string[] = [];
+function openaiDecisions(flags: ComplianceFlag[], openaiOutcome: OpenAIRunOutcome | null): ComplianceDecision[] {
+  const out: ComplianceDecision[] = [];
   for (const f of flags) {
     const oa = openaiAnswerFor(openaiOutcome, f.id);
-    if (!oa) continue;
-    parts.push(`${f.label}: ${Boolean(oa.value) ? "FLAGGED" : "clear"}`);
+    if (oa) out.push({ id: f.id, flagged: Boolean(oa.value) });
   }
-  return parts.length > 0 ? parts.join("; ") : null;
+  return out;
 }
 
 function FlagItem({
@@ -43,8 +41,9 @@ function FlagItem({
         f.flagged ? "border-rose-500/25 bg-rose-500/[0.06]" : "border-border bg-surface"
       }`}
     >
-      <span className="text-sm font-bold text-foreground">{f.label}</span>
-      <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <p className="text-sm font-bold text-foreground">{f.label}</p>
+      <p className="mt-0.5 text-xs text-muted">{COMPLIANCE_CHECKS[f.id].definition}</p>
+      <div className="mt-2 grid grid-cols-1 gap-3 @xl:grid-cols-2">
         <div>
           <div className="mb-1 flex items-center justify-between">
             <p className="text-xs font-bold uppercase tracking-wide text-muted">TypeSafe</p>
@@ -58,7 +57,7 @@ function FlagItem({
           </div>
           <ProbabilityBar label="probability" value={f.probability} tone={f.flagged ? "rose" : "emerald"} highlight />
         </div>
-        <div className="border-t border-border/60 pt-2 lg:border-t-0 lg:border-l lg:pl-3 lg:pt-0">
+        <div className="border-t border-border/60 pt-2 @xl:border-t-0 @xl:border-l @xl:pl-3 @xl:pt-0">
           <div className="mb-1 flex items-center justify-between">
             <p className="text-xs font-bold uppercase tracking-wide text-muted">OpenAI</p>
             {oaFlagged != null && (
@@ -99,7 +98,9 @@ function ExcerptComplianceSection({
   excerptFlags,
   excerptOpenaiOutcome,
   openaiConfigured,
+  typesafeSource,
 }: {
+  typesafeSource: "live" | "mock" | null;
   selectedExcerpt: string;
   excerptStatus: "idle" | "pending" | "done" | "error";
   excerptFlags: ComplianceFlag[];
@@ -109,12 +110,12 @@ function ExcerptComplianceSection({
   const preview = selectedExcerpt.length > 160 ? `${selectedExcerpt.slice(0, 160)}…` : selectedExcerpt;
   return (
     <div className="animate-in space-y-2 rounded-xl border-2 border-accent bg-accent-soft p-4">
-      <p className="text-xs font-bold uppercase tracking-wide text-accent-ink">Selected excerpt</p>
-      <p className="border-l-2 border-accent-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
+      <p className="text-xs font-bold uppercase tracking-wide text-accent-soft-ink">Selected excerpt</p>
+      <p className="border-l-2 border-accent-soft-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
       {excerptStatus === "pending" ? (
         <p className="text-sm font-semibold text-muted">Checking…</p>
       ) : excerptStatus === "error" ? (
-        <p className="text-sm font-semibold text-rose-700">Couldn&rsquo;t check this excerpt.</p>
+        <p className="text-sm font-semibold text-rose-800">Couldn&rsquo;t check this excerpt.</p>
       ) : excerptFlags.length === 0 ? (
         <p className="text-sm text-muted">No answer yet.</p>
       ) : (
@@ -127,13 +128,13 @@ function ExcerptComplianceSection({
       <OpenAINote outcome={excerptOpenaiOutcome} />
       {excerptStatus === "done" && excerptFlags.length > 0 && (
         <EvaluationPanel
-          task="Excerpt compliance flags"
-          criteria={COMPLIANCE_CRITERIA}
-          input="Compliance flags for the highlighted excerpt"
-          context={selectedExcerpt}
-          typesafeOutput={describeFlags(excerptFlags)}
-          openaiOutput={describeOpenaiFlags(excerptFlags, excerptOpenaiOutcome)}
+          kind="compliance"
+          scope="compliance:excerpt"
+          typesafePacket={buildCompliancePacket({ scope: "excerpt", decisions: typesafeDecisions(excerptFlags), sourceText: selectedExcerpt })}
+          typesafeSource={typesafeSource}
+          openaiPacket={buildCompliancePacket({ scope: "excerpt", decisions: openaiDecisions(excerptFlags, excerptOpenaiOutcome), sourceText: selectedExcerpt })}
           openaiConfigured={openaiConfigured}
+          openaiEmptyReason={openaiDecisions(excerptFlags, excerptOpenaiOutcome).length > 0 ? undefined : noOpenAIAnswerReason(excerptOpenaiOutcome, "the compliance checks")}
         />
       )}
     </div>
@@ -150,12 +151,18 @@ export function ComplianceFlags({
   excerptStatus,
   excerptFlags,
   excerptOpenaiOutcome,
+  typesafeSource,
+  excerptTypesafeSource,
   onRerun,
   rerunPending,
 }: {
+  /** Whether the whole-document TypeSafe answer came from the live model or the local demo heuristic. */
+  typesafeSource: "live" | "mock" | null;
+  /** Same, for the highlighted-excerpt answer. */
+  excerptTypesafeSource: "live" | "mock" | null;
   flags: ComplianceFlag[];
   hasDocument: boolean;
-  /** Full document text, passed as G-Eval's judging context — see EvaluationPanel. */
+  /** Full document text, the source text the judge grades the flags against. */
   documentText?: string | null;
   openaiOutcome: OpenAIRunOutcome | null;
   openaiConfigured: boolean;
@@ -175,6 +182,7 @@ export function ComplianceFlags({
       excerptFlags={excerptFlags ?? []}
       excerptOpenaiOutcome={excerptOpenaiOutcome ?? null}
       openaiConfigured={openaiConfigured}
+      typesafeSource={excerptTypesafeSource}
     />
   ) : null;
 
@@ -219,7 +227,7 @@ export function ComplianceFlags({
     <div className="space-y-3">
       {excerptSection}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <EvalSummaryBar icon="🛡️" headline={`${flaggedCount}/${flags.length} flags tripped`} stats={summaryStats} />
+        <EvalSummaryBar icon="shield" headline={`${flaggedCount}/${flags.length} flags tripped`} stats={summaryStats} />
         {onRerun && <RerunButton onClick={onRerun} pending={Boolean(rerunPending)} label={rerunLabel} />}
       </div>
       <ul className="space-y-2">
@@ -229,13 +237,12 @@ export function ComplianceFlags({
       </ul>
       <OpenAINote outcome={openaiOutcome} />
       <EvaluationPanel
-        task="Compliance flags"
-        criteria={COMPLIANCE_CRITERIA}
-        input="Compliance flags for the loaded contract"
-        context={documentText ?? undefined}
-        typesafeOutput={describeFlags(flags)}
-        openaiOutput={describeOpenaiFlags(flags, openaiOutcome)}
+        kind="compliance"
+        typesafePacket={buildCompliancePacket({ scope: "document", decisions: typesafeDecisions(flags), sourceText: documentText ?? null })}
+        typesafeSource={typesafeSource}
+        openaiPacket={buildCompliancePacket({ scope: "document", decisions: openaiDecisions(flags, openaiOutcome), sourceText: documentText ?? null })}
         openaiConfigured={openaiConfigured}
+        openaiEmptyReason={openaiDecisions(flags, openaiOutcome).length > 0 ? undefined : noOpenAIAnswerReason(openaiOutcome, "the compliance checks")}
       />
     </div>
   );

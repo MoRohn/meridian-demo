@@ -11,6 +11,8 @@ import type { TurnContext } from "../orchestrator/state";
  */
 export const RISK_DIMENSIONS = {
   liability_exposure: {
+    label: "Liability exposure",
+    summary: "How exposed the customer side is to uncapped or asymmetric liability.",
     instructions: "How exposed is our counterparty-facing side to uncapped or asymmetric liability in `active_document.text`?",
     criteria: [
       "Liability is mutually capped at a reasonable, clearly stated amount",
@@ -20,6 +22,8 @@ export const RISK_DIMENSIONS = {
     weight: 0.5,
   },
   indemnification_harshness: {
+    label: "Indemnification harshness",
+    summary: "How one-sided the indemnification obligation is.",
     instructions: "How one-sided is the indemnification obligation in `active_document.text`?",
     criteria: [
       "Indemnification is mutual and scoped to each party's own breaches",
@@ -29,6 +33,8 @@ export const RISK_DIMENSIONS = {
     weight: 0.3,
   },
   termination_rigidity: {
+    label: "Termination rigidity",
+    summary: "How difficult it is to exit the agreement.",
     instructions: "How difficult is it to exit this agreement based on `active_document.text`?",
     criteria: [
       "Either party can terminate with reasonable notice and no penalty",
@@ -40,6 +46,20 @@ export const RISK_DIMENSIONS = {
 } as const;
 
 export type RiskDimensionId = keyof typeof RISK_DIMENSIONS;
+
+/** Overall-risk band edges, shared by the dashboard's coloring and the judge's evidence packet so they can never drift. */
+export const RISK_BANDS = { moderateFrom: 0.33, highFrom: 0.66 } as const;
+export type RiskBand = "low" | "moderate" | "high";
+export const RISK_BAND_LABELS: Record<RiskBand, string> = { low: "Low risk", moderate: "Moderate risk", high: "High risk" };
+
+/**
+ * The band for an overall risk. It is taken from the figure as it is SHOWN (a whole percentage): a total of 0.655 is
+ * displayed as 66%, so it must not be labelled with the band that 65.5% falls in while the text beside it says 66%.
+ */
+export function riskBand(overall: number): RiskBand {
+  const shown = Math.round(overall * 100) / 100;
+  return shown >= RISK_BANDS.highFrom ? "high" : shown >= RISK_BANDS.moderateFrom ? "moderate" : "low";
+}
 
 export const clauseRiskSkill: Skill<TurnContext> = {
   name: "clause_risk",

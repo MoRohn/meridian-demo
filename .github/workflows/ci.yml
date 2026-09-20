@@ -1,0 +1,45 @@
+name: Web
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    # Typecheck, lint, unit tests and a production build. No keys and no network calls to any model.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Next generates the global route types (LayoutProps and friends) itself; a fresh checkout has none yet.
+      - run: npx next typegen
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    # The browser suite (layout, accessibility, keyboard, touch targets) against the production build.
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Start the app
+        run: |
+          npx next start -p 3000 &
+          npx --yes wait-on http://localhost:3000 --timeout 60000
+      - name: Run the UI suite
+        run: npm run test:e2e
+        env:
+          E2E_URL: http://localhost:3000

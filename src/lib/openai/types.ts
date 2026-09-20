@@ -24,6 +24,18 @@ export interface OpenAIRunResult {
   requestBytes: number;
 }
 
+/**
+ * The reply Meridian's own pipeline composes from OpenAI's answers to a turn's questions: the same composer TypeSafe's
+ * reply goes through, run on OpenAI's judgments, so the two replies can be evaluated like for like.
+ */
+export interface OpenAITurn {
+  reply: string;
+  intent: { choice: string; confidence: number } | null;
+  risk: import("../skills/clauseRisk").CompositeRisk | null;
+  complianceFlags: import("../orchestrator/compose").ComplianceFlag[];
+  blocked: "privileged" | "injection" | null;
+}
+
 export type OpenAIRunOutcome =
   | { ok: true; result: OpenAIRunResult }
   | { ok: false; reason: "not_configured" | "error"; message?: string };

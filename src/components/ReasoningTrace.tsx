@@ -1,18 +1,18 @@
 import type { TraceEntry } from "@/lib/orchestrator/run";
-import type { OpenAIRunOutcome } from "@/lib/openai/types";
-import type { SessionTotals } from "@/lib/compare/pricing";
-import { fmtUsd } from "@/lib/compare/pricing";
+import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
 import { agrees, agreementSummary, openaiAnswerFor, typesafeSummary } from "@/lib/compare/agreement";
 import { ProbabilityBar } from "./ProbabilityBar";
 import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar } from "./EvalSummaryBar";
+import { Icon } from "./Icon";
+import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
+import { questionLabel } from "@/lib/trace/labels";
 import { EvaluationPanel } from "./EvaluationPanel";
-
-const REPLY_CRITERIA =
-  "Given the document text in context, assess whether the reply is well-reasoned, grounded in the " +
-  "actual document content, and correctly reflects the underlying judgments rather than making " +
-  "unsupported claims.";
+import { ActivityTrace, PerformancePanel } from "./ModelPerformance";
+import { buildReplyPacket } from "@/lib/eval/packets";
+import type { ComplianceFlag } from "@/lib/orchestrator/run";
+import type { CompositeRisk } from "@/lib/skills/clauseRisk";
 
 const SKILL_LABELS: Record<string, string> = {
   guardrails: "Guardrails",
@@ -27,33 +27,41 @@ export function ReasoningTrace({
   source,
   openaiOutcome,
   openaiConfigured,
-  sessionTotals,
   onRerun,
   rerunPending,
   lastMessage,
   lastReply,
   documentText,
+  judgments,
+  openaiTurn,
 }: {
   trace: TraceEntry[];
   source: "live" | "mock";
   openaiOutcome: OpenAIRunOutcome | null;
   openaiConfigured: boolean;
-  sessionTotals: SessionTotals;
   /** Re-sends the last chat message to refresh this trace. Omitted (no button shown) until at least one message has been sent. */
   onRerun?: () => void;
   rerunPending?: boolean;
-  /** The user message and composed reply behind the trace currently shown — evaluated by DeepEval below. OpenAI has no equivalent composed reply in this architecture (it only answers the structured questions), so only TypeSafe's side is judged here. */
+  /** The user message and TypeSafe's composed reply behind the trace currently shown; OpenAI's counterpart arrives as `openaiTurn`. Both are evaluated by DeepEval below. */
   lastMessage?: string | null;
   lastReply?: string | null;
   documentText?: string | null;
+  /** The risk and compliance judgments the reply was composed from, checked against the reply by the judge. */
+  judgments?: { risk: CompositeRisk | null; flags: ComplianceFlag[] } | null;
+  /** The reply composed from OpenAI's answers by the same pipeline; evaluated alongside TypeSafe's. */
+  openaiTurn?: OpenAITurn | null;
 }) {
   if (trace.length === 0) {
     return (
-      <p className="text-base text-secondary">
-        Send a message to see the Jev call: every applicable skill&rsquo;s questions, asked together in one
-        request, with the answers your code actually used highlighted, and right next to each one, what OpenAI
-        returns for the identical question.
-      </p>
+      <div className="space-y-3">
+        <p className="text-base text-secondary">
+          Send a message to see the Jev call: every applicable skill&rsquo;s questions, asked together in one
+          request, with the answers your code actually used highlighted, and right next to each one, what OpenAI
+          returns for the identical question.
+        </p>
+        <ActivityTrace />
+        <PerformancePanel />
+      </div>
     );
   }
 
@@ -65,7 +73,7 @@ export function ReasoningTrace({
     <div className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <EvalSummaryBar
-          icon="🧠"
+          icon="trace"
           headline={`${trace.length} question${trace.length === 1 ? "" : "s"} in one call`}
           stats={[
             { label: "used:", value: `${usedEntries.length}/${trace.length}` },
@@ -83,8 +91,8 @@ export function ReasoningTrace({
       </p>
 
       {!openaiConfigured && (
-        <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-sm text-accent-ink">
-          Set <code className="text-accent-ink">OPENAI_API_KEY</code> to see OpenAI&rsquo;s answer next to every
+        <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-sm text-accent-soft-ink">
+          Set <code className="text-accent-soft-ink">OPENAI_API_KEY</code> to see OpenAI&rsquo;s answer next to every
           judgment below.
         </p>
       )}
@@ -112,35 +120,38 @@ export function ReasoningTrace({
 
       {lastReply && (
         <EvaluationPanel
-          task="Chat reply quality"
-          criteria={REPLY_CRITERIA}
-          input={lastMessage ?? ""}
-          context={documentText ?? undefined}
-          typesafeOutput={lastReply}
-          openaiOutput={null}
+          kind="reply"
+          typesafePacket={buildReplyPacket({
+            message: lastMessage ?? "",
+            reply: lastReply,
+            risk: judgments?.risk
+              ? { overall: judgments.risk.overall, ratings: judgments.risk.perDimension.map((d) => ({ id: d.id, normalized: d.normalized })) }
+              : null,
+            flags: judgments?.flags ?? [],
+            sourceText: documentText ?? null,
+          })}
+          typesafeSource={source}
+          openaiPacket={
+            openaiTurn
+              ? buildReplyPacket({
+                  message: lastMessage ?? "",
+                  reply: openaiTurn.reply,
+                  risk: openaiTurn.risk
+                    ? { overall: openaiTurn.risk.overall, ratings: openaiTurn.risk.perDimension.map((d) => ({ id: d.id, normalized: d.normalized })) }
+                    : null,
+                  flags: openaiTurn.complianceFlags.map((f) => ({ id: f.id, label: f.label, flagged: f.flagged })),
+                  sourceText: documentText ?? null,
+                })
+              : null
+          }
           openaiConfigured={openaiConfigured}
+          // The reply is cleared when a turn starts while the previous outcome lingers, so only a failed call is a reason to show.
+          openaiEmptyReason={openaiTurn || openaiOutcome?.ok !== false ? undefined : noOpenAIAnswerReason(openaiOutcome, "a usable set of answers")}
         />
       )}
 
-      {sessionTotals.turns > 0 && (
-        <div className="rounded-xl border border-border bg-surface p-3 text-sm">
-          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">
-            Session: {sessionTotals.turns} turn{sessionTotals.turns === 1 ? "" : "s"}
-          </p>
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <span className="shrink-0 text-muted">TypeSafe cost</span>
-              <span className="shrink-0 font-bold tabular-nums text-foreground">{fmtUsd(sessionTotals.typesafe.costUsd)}</span>
-            </div>
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <span className="shrink-0 text-muted">OpenAI cost</span>
-              <span className="shrink-0 font-bold tabular-nums text-foreground">
-                {sessionTotals.openai.calls > 0 ? fmtUsd(sessionTotals.openai.costUsd) : "not run"}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
+      <PerformancePanel />
+      <ActivityTrace />
     </div>
   );
 }
@@ -166,25 +177,28 @@ function TraceCard({
       }`}
     >
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-xs font-medium text-secondary">
             {SKILL_LABELS[entry.skill] ?? entry.skill}
           </span>
-          <code className="truncate text-sm text-muted">{entry.questionId}</code>
+          <span className="min-w-0 text-sm font-bold text-foreground">{questionLabel(entry.questionId)}</span>
+          <code className="break-all text-xs text-muted" title="The question id sent to the model">
+            {entry.questionId}
+          </code>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
         <div>
           <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">TypeSafe</p>
           <AnswerView answer={entry.answer} />
         </div>
-        <div className="border-t border-border/60 pt-2 lg:border-t-0 lg:border-l lg:pl-3 lg:pt-0">
+        <div className="border-t border-border/60 pt-2 @xl:border-t-0 @xl:border-l @xl:pl-3 @xl:pt-0">
           <div className="mb-1 flex items-center justify-between">
             <p className="text-xs font-bold uppercase tracking-wide text-muted">OpenAI</p>
             {match != null && (
-              <span className={`text-xs font-bold ${match ? "text-emerald-700" : "text-rose-700"}`}>
-                {match ? "✓ agrees" : "✕ disagrees"}
+              <span className={`text-xs font-bold ${match ? "text-emerald-800" : "text-rose-800"}`}>
+                <span className="inline-flex items-center gap-1"><Icon name={match ? "check" : "x"} size={12} />{match ? "agrees" : "disagrees"}</span>
               </span>
             )}
           </div>
