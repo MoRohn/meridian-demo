@@ -15,6 +15,8 @@ export interface EvaluatedPacket {
   actualOutput: string;
   /** Length of the source text the answer was judged against. */
   contextChars: number;
+  /** The source text itself, kept only when it is short (a highlighted excerpt, one cited section); a whole contract is not copied. */
+  context?: string;
 }
 
 export interface StoredEvaluation {

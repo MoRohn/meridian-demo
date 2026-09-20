@@ -2,29 +2,7 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { ReportDoc } from "../doc";
 
-/**
- * The PDF's built-in fonts cover Latin-1 only. Typographic punctuation is mapped to plain equivalents and anything else
- * outside that range becomes "?", so a contract's stray symbol can never garble a whole line.
- */
-const REPLACEMENTS: Record<string, string> = {
-  "\u2026": "...",
-  "\u201c": '"',
-  "\u201d": '"',
-  "\u2018": "'",
-  "\u2019": "'",
-  "\u2013": "-",
-  "\u2014": "-",
-  "\u2265": ">=",
-  "\u2264": "<=",
-  "\u2192": "->",
-  "\u2022": "-",
-};
-export function pdfSafe(text: string): string {
-  return text
-    .replace(/[\u2026\u201c\u201d\u2018\u2019\u2013\u2014\u2265\u2264\u2192\u2022]/g, (c) => REPLACEMENTS[c])
-    .replace(/[\u0000-\u0008\u000b-\u001f]/g, " ")
-    .replace(/[^\n\u0020-\u007e\u00a0-\u00ff]/g, "?");
-}
+import { glyphCoverage, makePdfText, toBase64, type PdfFonts } from "./pdfFonts";
 
 type RGB = [number, number, number];
 const INK: RGB = [28, 37, 48];
@@ -36,9 +14,16 @@ const WARN: RGB = [138, 90, 0];
 const MARGIN = 12;
 const HEADING_SIZE = { 1: 20, 2: 15, 3: 12, 4: 10 } as const;
 
-/** A PDF (landscape A4). jsPDF and its table plugin are loaded only when this format is chosen. */
-export async function renderPdf(report: ReportDoc): Promise<Blob> {
+/** A PDF (landscape A4) with the DejaVu fonts embedded. jsPDF and its table plugin are loaded only when this format is chosen. */
+export async function renderPdf(report: ReportDoc, fonts: PdfFonts): Promise<Blob> {
   const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  for (const [key, family, style] of [["regular", "DejaVu", "normal"], ["bold", "DejaVu", "bold"], ["italic", "DejaVu", "italic"], ["mono", "DejaVuMono", "normal"]] as const) {
+    const file = `${family}-${style}.ttf`;
+    pdf.addFileToVFS(file, toBase64(fonts[key]));
+    pdf.addFont(file, family, style, undefined, "Identity-H");
+  }
+  const sanitizer = makePdfText(glyphCoverage(fonts.regular));
+  const pdfSafe = sanitizer.clean;
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
   const width = pageW - 2 * MARGIN;
@@ -52,7 +37,7 @@ export async function renderPdf(report: ReportDoc): Promise<Blob> {
       y = MARGIN;
     }
   };
-  const font = (style: "normal" | "bold" | "italic", size: number, color: RGB, family = "helvetica") => {
+  const font = (style: "normal" | "bold" | "italic", size: number, color: RGB, family = "DejaVu") => {
     pdf.setFont(family, style);
     pdf.setFontSize(size);
     pdf.setTextColor(...color);
@@ -74,7 +59,7 @@ export async function renderPdf(report: ReportDoc): Promise<Blob> {
       case "heading": {
         const size = HEADING_SIZE[b.level];
         y += b.level === 1 ? 0 : b.level === 2 ? 6 : 3;
-        ensure(lineHeight(size) + 12); // keep a heading with what follows it
+        ensure(lineHeight(size) + (b.level === 1 ? 12 : 30)); // keep a heading with what follows it, not stranded at the foot of a page
         font("bold", size, b.level === 4 ? MUTED : DEEP);
         lines(wrap(b.level === 4 ? b.text.toUpperCase() : b.text, width), MARGIN, size);
         if (b.level === 2) {
@@ -123,7 +108,7 @@ export async function renderPdf(report: ReportDoc): Promise<Blob> {
       case "list": {
         font("normal", 9.5, INK);
         b.items.forEach((item, i) => {
-          const mark = b.ordered ? `${i + 1}.` : "-";
+          const mark = b.ordered ? `${i + 1}.` : "\u2022";
           const rows = wrap(item, width - 8);
           ensure(lineHeight(9.5));
           font("normal", 9.5, INK);
@@ -148,13 +133,13 @@ export async function renderPdf(report: ReportDoc): Promise<Blob> {
         break;
       }
       case "code": {
-        font("normal", 8, INK, "courier");
+        font("normal", 8, INK, "DejaVuMono");
         const rows = b.text.split("\n").flatMap((line) => wrap(line || " ", width - 6));
         const lh = lineHeight(8);
         lines(rows, MARGIN + 3, 8, (lineY) => {
           pdf.setFillColor(...WASH);
           pdf.rect(MARGIN, lineY, width, lh, "F");
-          font("normal", 8, INK, "courier");
+          font("normal", 8, INK, "DejaVuMono");
         });
         y += 2;
         break;
@@ -165,7 +150,7 @@ export async function renderPdf(report: ReportDoc): Promise<Blob> {
           head: [b.columns.map(pdfSafe)],
           body: b.rows.map((r) => r.map(pdfSafe)),
           margin: { left: MARGIN, right: MARGIN, bottom: MARGIN + 4 },
-          styles: { font: "helvetica", fontSize: 7, cellPadding: 1.4, textColor: INK, lineColor: [217, 223, 230], lineWidth: 0.15, overflow: "linebreak" },
+          styles: { font: "DejaVu", fontSize: 7, cellPadding: 1.4, textColor: INK, lineColor: [217, 223, 230], lineWidth: 0.15, overflow: "linebreak" },
           headStyles: { fillColor: DEEP, textColor: [255, 255, 255], fontStyle: "bold" },
           alternateRowStyles: { fillColor: WASH },
           didParseCell: (data) => {
@@ -181,6 +166,16 @@ export async function renderPdf(report: ReportDoc): Promise<Blob> {
         break;
       }
     }
+  }
+
+  const dropped = sanitizer.replaced();
+  if (dropped.length) {
+    y += 4;
+    ensure(lineHeight(8.5) * 3);
+    font("italic", 8.5, MUTED);
+    // Named by code point: the characters themselves are exactly what this PDF cannot draw.
+    const shown = dropped.slice(0, 20).map((c) => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`).join(" ");
+    lines(wrap(`Note: ${dropped.length} character${dropped.length === 1 ? "" : "s"} in this report (${shown}${dropped.length > 20 ? " ..." : ""}) have no glyph in the PDF's font and are shown as a placeholder. The web page and Word versions of this report keep them.`, width), MARGIN, 8.5);
   }
 
   const pages = pdf.getNumberOfPages();

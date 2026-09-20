@@ -11,6 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "node e2e/smoke.mjs",
+    "test:e2e:report": "node e2e/report.mjs",
+    "check:report": "node e2e/check-report.mjs",
     "eval-service": "node scripts/eval-service.mjs start",
     "eval-service:setup": "node scripts/eval-service.mjs setup"
   },

@@ -21,6 +21,9 @@ import type { EvalKind, EvalOutcome, EvalResult } from "@/lib/eval/types";
 import { Icon, type IconName } from "./Icon";
 import { RerunButton } from "./RerunButton";
 
+/** Sources up to this long are kept with a result so a report can quote them; longer ones (a whole contract) are only counted. */
+const SHORT_SOURCE_CHARS = 2000;
+
 type Tone = "emerald" | "amber" | "rose";
 
 const TONE = {
@@ -346,7 +349,12 @@ export function EvaluationPanel({
     for (const side of runnable) {
       const sig = sigOf(side);
       const packet = side.packet!;
-      const snapshot = { input: packet.input, actualOutput: packet.actualOutput, contextChars: packet.context?.length ?? 0 };
+      const snapshot = {
+        input: packet.input,
+        actualOutput: packet.actualOutput,
+        contextChars: packet.context?.length ?? 0,
+        context: packet.context && packet.context.length <= SHORT_SOURCE_CHARS ? packet.context : undefined,
+      };
       evalStore.set(scope, side.backend, { sig, outcome: null, pending: true, auto, kind, packet: snapshot });
       // Each judge call is its own activity with its own timer, so it starts from zero whatever else is running.
       const activityId = activityLog.begin("judge", "evaluation", `${copy.title}: ${side.name}`);

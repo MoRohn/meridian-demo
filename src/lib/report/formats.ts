@@ -1,6 +1,7 @@
 import type { ReportDoc, ReportFormat } from "./doc";
 import { renderHtml } from "./render/html";
 import { renderMarkdown } from "./render/markdown";
+import { fetchPdfFonts, type PdfFonts } from "./render/pdfFonts";
 
 export interface ReportFormatInfo {
   id: ReportFormat;
@@ -18,7 +19,7 @@ export const REPORT_FORMATS: readonly ReportFormatInfo[] = [
 ];
 
 /** Renders the report as a downloadable file. PDF and Word load their libraries only when asked for, so they cost nothing until used. */
-export async function renderReport(doc: ReportDoc, format: ReportFormat): Promise<Blob> {
+export async function renderReport(doc: ReportDoc, format: ReportFormat, options: { fonts?: PdfFonts } = {}): Promise<Blob> {
   const info = REPORT_FORMATS.find((f) => f.id === format)!;
   switch (format) {
     case "html":
@@ -26,7 +27,7 @@ export async function renderReport(doc: ReportDoc, format: ReportFormat): Promis
     case "md":
       return new Blob([renderMarkdown(doc)], { type: info.mime });
     case "pdf":
-      return (await import("./render/pdf")).renderPdf(doc);
+      return (await import("./render/pdf")).renderPdf(doc, options.fonts ?? (await fetchPdfFonts()));
     case "docx":
       return (await import("./render/docx")).renderDocx(doc);
   }

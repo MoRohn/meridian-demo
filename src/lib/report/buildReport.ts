@@ -105,7 +105,7 @@ const COLUMNS = [
   "Score",
   "Result",
   "Pass at",
-  "Band",
+  "Band (0-10)",
   "Rubric",
   "Judge model",
   "Judge time",
@@ -129,7 +129,7 @@ export function buildReportTable(evals: readonly StoredEvaluationRow[]): ReportT
         result ? pct(result.score) : NA,
         result ? (result.success ? "Pass" : "Fail") : NA,
         result ? pct(result.threshold) : NA,
-        band ? `${band.low}-${band.high} of 10` : NA,
+        band ? `${band.low}-${band.high}` : NA,
         result ? `${result.rubric.id} v${result.rubric.version}` : NA,
         result?.judgeModel ?? NA,
         result ? formatElapsed(result.latencyMs) : NA,
@@ -177,7 +177,8 @@ function surfaceSection(s: Surface, evals: readonly StoredEvaluationRow[], title
     if (packet) {
       out.push(para("", "What was asked."), { type: "code", text: packet.input.trim() });
       out.push(para("", `What ${BACKEND_NAMES[c.backend]} answered (as the judge saw it).`), { type: "code", text: packet.actualOutput.trim() });
-      out.push(para(`Judged against ${packet.contextChars.toLocaleString("en-US")} characters of source text.`, undefined, "muted"));
+      if (packet.context) out.push(para("", "Source text it was checked against."), { type: "code", text: packet.context.trim() });
+      else out.push(para(`Judged against ${packet.contextChars.toLocaleString("en-US")} characters of source text (the full document, not repeated here).`, undefined, "muted"));
     }
   }
 
@@ -281,7 +282,7 @@ export function buildReportDoc(input: ReportInput): ReportDoc {
     blocks.push(para("No evaluations have run yet. Analyze a contract, then open a tab to score it.", undefined, "muted"));
   } else {
     blocks.push({ type: "table", columns: table.columns, rows: table.rows });
-    blocks.push(para("Score is the judge's 0-100% rating of the answer against the source text. Pass at is the threshold for that rubric. Band is the 0-10 score band the score falls in. Scores are comparable only within one rubric version.", undefined, "muted"));
+    blocks.push(para("Score is the judge's 0-100% rating of the answer against the source text. Pass at is the threshold for that rubric. Band is the 0-10 score band the score falls in (what that band means is spelled out below). Scores are comparable only within one rubric version.", undefined, "muted"));
   }
 
   const scoring = scoringSections(evals);

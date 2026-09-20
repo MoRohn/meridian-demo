@@ -145,7 +145,19 @@ export async function renderDocx(doc: ReportDoc): Promise<Blob> {
     creator: "Meridian",
     title: doc.title,
     numbering: { config: [{ reference: "ordered", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.START }] }] },
-    styles: { default: { document: { run: { font: FONT, size: 21 } } } },
+    styles: {
+      default: { document: { run: { font: FONT, size: 21 } } },
+      // Defined, not just referenced, so Word's navigation pane, outline view and table of contents see the real headings.
+      paragraphStyles: ([1, 2, 3, 4] as const).map((level) => ({
+        id: `Heading${level}`,
+        name: `heading ${level}`,
+        basedOn: "Normal",
+        next: "Normal",
+        quickFormat: true,
+        run: { font: FONT, bold: true, size: HEADINGS[level].size, color: level === 4 ? MUTED : DEEP },
+        paragraph: { keepNext: true, outlineLevel: level - 1 },
+      })),
+    },
     sections: [
       {
         properties: { page: { size: { orientation: PageOrientation.LANDSCAPE }, margin: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN } } },

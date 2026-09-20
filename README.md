@@ -365,6 +365,13 @@ assertions rather than eyeballing in the UI:
 `npm run test:e2e` drives the running app in a real browser (Chrome via `playwright-core`) at eight screen sizes, phone through
 1920px, checking layout, accessibility (axe), keyboard and dialog behavior, and touch-target sizes. It needs no API keys.
 
+`npm run test:e2e:report` checks **Download report** end to end: it populates Risk, Compliance and Citations through the real UI with the
+judge and OpenAI simulated at known scores, downloads the web page, PDF, Word and Markdown files, and checks their tables, explanations,
+characters, page layout and the menu's accessibility. Files and screenshots are written to `reports/` (gitignored). It needs no API keys.
+`npm run check:report -- <file>` validates a report you downloaded from your own session (.html, .pdf, .docx or .md): it is complete, the
+table agrees with the scoring sections, pass/fail agrees with the threshold and the band agrees with the score. It needs no keys and no
+running app, so a report produced by the real judge, with the keys saved in the Settings modal, can be checked directly.
+
 The eval service has its own suites: `pytest -q` in `eval-service/` covers validation, prompt construction, injection detection, and
 monitoring with the judge stubbed, and `python golden/run_golden.py` scores the real judge against known-answer cases (see
 [`eval-service/README.md`](eval-service/README.md)).

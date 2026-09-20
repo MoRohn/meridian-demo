@@ -57,7 +57,7 @@ describe("buildReportTable", () => {
     const [ts, oa] = table.rows;
     expect(ts[col("Score")]).toBe("85%");
     expect(ts[col("Result")]).toBe("Pass");
-    expect(ts[col("Band")]).toBe("6-10 of 10");
+    expect(ts[col("Band (0-10)")]).toBe("6-10");
     expect(ts[col("Rubric")]).toBe("risk v2");
     expect(ts[col("Judge time")]).toBe("1.5s");
     expect(oa[col("Score")]).toBe("40%");
@@ -117,6 +117,15 @@ describe("buildReportMarkdown", () => {
     expect(md).toContain("1. Find the clause");
     expect(md).toContain("Overall risk: 70%");
     expect(md).toContain("**Head to head.** TypeSafe scored 45 points higher");
+  });
+
+  it("quotes a short source, and only counts a long one", () => {
+    const short = row("risk:excerpt", "typesafe", "risk", result(0.8), { packet: { input: "q", actualOutput: "a", contextChars: 20, context: "The Supplier's liability is unlimited." } });
+    const full = row("risk", "typesafe", "risk", result(0.8));
+    const out = buildReportMarkdown({ generatedAt: at, document: null, evals: [short, full], activities: [], trace: [] });
+    expect(out).toContain("**Source text it was checked against.**");
+    expect(out).toContain("The Supplier's liability is unlimited.");
+    expect(out).toContain("Judged against 12,345 characters of source text (the full document, not repeated here).");
   });
 
   it("says plainly when a kind was never evaluated", () => {
