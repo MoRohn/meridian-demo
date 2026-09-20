@@ -43,7 +43,7 @@ export function Workspace({
               aria-selected={isActive}
               onClick={() => onChange(t.id)}
               className={`flex flex-1 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 py-2.5 text-sm font-bold transition-colors sm:flex-none lg:py-1.5 ${
-                isActive ? "bg-deep text-accent" : "text-secondary hover:bg-surface-hover hover:text-deep"
+                isActive ? "bg-fill text-on-fill" : "text-secondary hover:bg-surface-hover hover:text-deep"
               }`}
             >
               <Icon name={t.icon} size={16} className="max-[419px]:hidden" />

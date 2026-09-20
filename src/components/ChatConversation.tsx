@@ -101,14 +101,14 @@ export function ChatConversation({
         {messages.map((m, i) => (
           <div key={i} className={`flex animate-in ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             {m.role === "assistant" && (
-              <div className="mr-2 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-deep text-base font-extrabold text-accent">
+              <div className="mr-2 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-fill text-base font-extrabold text-on-fill">
                 M
               </div>
             )}
             <div
               className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-base font-medium leading-relaxed shadow-sm ${
                 m.role === "user"
-                  ? "rounded-br-sm bg-deep text-white"
+                  ? "rounded-br-sm bg-fill text-on-fill"
                   : "rounded-bl-sm border border-border bg-surface text-foreground"
               }`}
             >
@@ -118,7 +118,7 @@ export function ChatConversation({
         ))}
         {sending && (
           <div className="flex animate-in justify-start">
-            <div className="mr-2 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-deep text-base font-extrabold text-accent">
+            <div className="mr-2 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-fill text-base font-extrabold text-on-fill">
               M
             </div>
             <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm border border-border bg-surface px-3.5 py-3 shadow-sm">
@@ -132,7 +132,7 @@ export function ChatConversation({
 
       <div className="border-t border-border bg-surface p-3 short:py-2">
         {selectedExcerpt && (
-          <p className="mb-1.5 text-xs font-semibold text-accent-ink">
+          <p className="mb-1.5 text-xs font-semibold text-accent-soft-ink">
             A passage is highlighted: Analyze/Check compliance below score just that excerpt.
           </p>
         )}
@@ -153,7 +153,7 @@ export function ChatConversation({
                 title={runsOnExcerpt ? "Scores the highlighted excerpt" : undefined}
                 className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-2.5 text-sm font-semibold lg:py-1.5 transition-colors disabled:opacity-40 ${
                   runsOnExcerpt
-                    ? "border-accent/50 bg-accent-soft text-accent-ink hover:border-accent"
+                    ? "border-accent/50 bg-accent-soft text-accent-soft-ink hover:border-accent"
                     : "border-border-strong text-secondary hover:border-deep/30 hover:text-deep"
                 }`}
               >

@@ -81,8 +81,8 @@ function ExcerptRiskSection({
 
   return (
     <div className="animate-in space-y-2 rounded-xl border-2 border-accent bg-accent-soft p-4">
-      <p className="text-xs font-bold uppercase tracking-wide text-accent-ink">Selected excerpt</p>
-      <p className="border-l-2 border-accent-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
+      <p className="text-xs font-bold uppercase tracking-wide text-accent-soft-ink">Selected excerpt</p>
+      <p className="border-l-2 border-accent-soft-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
       {excerptStatus === "pending" ? (
         <p className="text-sm font-semibold text-muted">Scoring…</p>
       ) : excerptStatus === "error" ? (
@@ -117,6 +117,7 @@ function ExcerptRiskSection({
       {excerptStatus === "done" && (
         <EvaluationPanel
           kind="risk"
+          scope="risk:excerpt"
           typesafePacket={
             excerptRisk
               ? buildRiskPacket({

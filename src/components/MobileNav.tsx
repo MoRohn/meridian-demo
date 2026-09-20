@@ -38,7 +38,7 @@ export function MobileNav({
               isActive ? "text-deep" : "text-muted hover:text-deep"
             }`}
           >
-            <span className={`flex h-7 w-14 items-center justify-center rounded-full transition-colors short:h-6 short:w-auto short:bg-transparent ${isActive ? "bg-accent" : ""}`}>
+            <span className={`flex h-7 w-14 items-center justify-center rounded-full transition-colors short:h-6 short:w-auto short:bg-transparent ${isActive ? "bg-accent text-accent-ink" : ""}`}>
               <Icon name={item.icon} size={20} />
             </span>
             {item.label}

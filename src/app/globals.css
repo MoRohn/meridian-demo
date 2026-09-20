@@ -3,8 +3,96 @@
 /* Landscape phones and other very short viewports, where vertical space is the scarce resource. */
 @custom-variant short (@media (max-height: 500px));
 
-:root {
-  /* Warm, editorial law-firm palette: deep forest green + pale mint + a lime CTA accent. */
+/*
+ * Five brightness levels, one palette family. The DEFAULT level lives on :root so first paint (and no JavaScript) is
+ * already right; the others are selected with <html data-level="...">, set by the slider in the header
+ * (src/components/ThemeControl.tsx) and, before first paint, by the inline script in layout.tsx.
+ *
+ *   bright     one step brighter than the original
+ *   original   the palette Meridian shipped with
+ *   default    slightly darker than the original; what a new visitor sees
+ *   dark       dark surfaces with light text
+ *   darkest    the deepest
+ *
+ * Every text/surface pair here is checked against WCAG AA in src/lib/theme.test.ts. Tokens with two jobs are split:
+ *   --deep      text and indicators (dark on light levels, light on dark levels)
+ *   --fill      solid fills that carry text (active tab, user bubble, primary buttons) with --on-fill on top
+ *   --accent-ink       ink on SOLID lime; --accent-soft-ink is text on the soft lime tint
+ */
+:root,
+:root[data-level="default"] {
+  color-scheme: light;
+  --bg: #cbd4b1;
+  --bg-elevated: #dad5ba;
+  --surface: #dad5ba;
+  --surface-hover: #c6cfa4;
+  --border: #b1bd8e;
+  --border-strong: #8e9f70;
+  --text: #0a1610;
+  --text-secondary: #25341f;
+  --text-muted: #43503a;
+
+  --deep: #071510;
+  --fill: #071510;
+  --fill-alt: #0b2013;
+  --on-fill: #d8e35a;
+
+  --accent: #d8e35a;
+  --accent-strong: #c3ce3f;
+  --accent-soft: rgba(216, 227, 90, 0.28);
+  --accent-ink: #1c2a12;
+  --accent-soft-ink: #1c2a12;
+
+  --paper: #f5f3e6;
+  --paper-ink: #1c1a14;
+  --paper-muted: #6a6553;
+
+  /* Each level's background, for the brightness slider's preview track. Checked against the real values in themePalette.test.ts. */
+  --swatch-bright: #eef2df;
+  --swatch-original: #dbe3c5;
+  --swatch-default: #cbd4b1;
+  --swatch-dark: #2a3425;
+  --swatch-darkest: #0f140d;
+
+  /* Status text sits on tinted chips over tinted rows, which is the worst case on this level; Tailwind's stock 800s fall short, so these are a step darker. */
+  --color-emerald-800: #05523c;
+  --color-rose-800: #7f1233;
+  --color-amber-800: #733309;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+}
+
+:root[data-level="bright"] {
+  color-scheme: light;
+  --bg: #eef2df;
+  --bg-elevated: #f8f5e8;
+  --surface: #f8f5e8;
+  --surface-hover: #e6ecd0;
+  --border: #d2dbb5;
+  --border-strong: #aebd8c;
+  --text: #0a1610;
+  --text-secondary: #2a3826;
+  --text-muted: #4a5842;
+  --deep: #071510;
+  --fill: #071510;
+  --fill-alt: #0b2013;
+  --on-fill: #d8e35a;
+  --accent-soft: rgba(216, 227, 90, 0.28);
+  --accent-ink: #1c2a12;
+  --accent-soft-ink: #1c2a12;
+  --paper: #fffef9;
+  --paper-ink: #1c1a14;
+  --paper-muted: #6f6a58;
+  /* Tailwind's own values: the default level overrides these, and inheritance must not leak that here. */
+  --color-emerald-800: #065f46;
+  --color-rose-800: #9f1239;
+  --color-amber-800: #92400e;
+}
+
+/* The palette Meridian shipped with, kept exactly. */
+:root[data-level="original"] {
+  color-scheme: light;
   --bg: #dbe3c5;
   --bg-elevated: #e8e3cd;
   --surface: #e8e3cd;
@@ -14,17 +102,73 @@
   --text: #0a1610;
   --text-secondary: #2a3826;
   --text-muted: #526049;
-
   --deep: #071510;
-  --deep-alt: #0b2013;
-
-  --accent: #d8e35a;
-  --accent-strong: #c3ce3f;
+  --fill: #071510;
+  --fill-alt: #0b2013;
+  --on-fill: #d8e35a;
   --accent-soft: rgba(216, 227, 90, 0.28);
   --accent-ink: #1c2a12;
+  --accent-soft-ink: #1c2a12;
+  --paper: #fdfcf6;
+  --paper-ink: #1c1a14;
+  --paper-muted: #6f6a58;
+  --color-emerald-800: #065f46;
+  --color-rose-800: #9f1239;
+  --color-amber-800: #92400e;
+}
 
-  --background: var(--bg);
-  --foreground: var(--text);
+/*
+ * The two dark levels. Text roles turn light; fills become the lime brand accent with dark ink, because a dark-green
+ * fill would all but disappear against a dark surface (about 1.3:1) while lime stays unmistakable. Tailwind's
+ * emerald/rose/amber text shades, which are tuned for light surfaces, are swapped for their light counterparts.
+ */
+:root[data-level="dark"],
+:root[data-level="darkest"] {
+  color-scheme: dark;
+  --deep: #f2f7e6;
+  --fill: #d8e35a;
+  --fill-alt: #c3ce3f;
+  --on-fill: #1c2a12;
+  --accent-soft: rgba(216, 227, 90, 0.16);
+  --accent-ink: #1c2a12;
+  --accent-soft-ink: #e6efa0;
+  --paper-ink: #1c1a14;
+
+  --color-emerald-800: #6ee7b7;
+  --color-emerald-900: #a7f3d0;
+  --color-rose-800: #fecdd3;
+  --color-rose-900: #ffe4e6;
+  --color-amber-800: #fcd34d;
+  --color-amber-900: #fde68a;
+}
+
+:root[data-level="dark"] {
+  --bg: #2a3425;
+  --bg-elevated: #354130;
+  --surface: #354130;
+  --surface-hover: #414f3a;
+  --border: #4a5a42;
+  --border-strong: #66795a;
+  --text: #eef4e2;
+  --text-secondary: #d0dabc;
+  --text-muted: #b7c5a3;
+  --paper: #dcd9c6;
+  --paper-muted: #58533f;
+}
+
+:root[data-level="darkest"] {
+  --bg: #0f140d;
+  --bg-elevated: #181f15;
+  --surface: #181f15;
+  --surface-hover: #222c1e;
+  --border: #2b3826;
+  --border-strong: #43533a;
+  --text: #e6eed6;
+  --text-secondary: #c1cdab;
+  --text-muted: #96a582;
+  --deep: #eef4df;
+  --paper: #c8c5b2;
+  --paper-muted: #4a4636;
 }
 
 @theme inline {
@@ -38,11 +182,17 @@
   --color-secondary: var(--text-secondary);
   --color-muted: var(--text-muted);
   --color-deep: var(--deep);
-  --color-deep-alt: var(--deep-alt);
+  --color-fill: var(--fill);
+  --color-fill-alt: var(--fill-alt);
+  --color-on-fill: var(--on-fill);
   --color-accent: var(--accent);
   --color-accent-strong: var(--accent-strong);
   --color-accent-soft: var(--accent-soft);
   --color-accent-ink: var(--accent-ink);
+  --color-accent-soft-ink: var(--accent-soft-ink);
+  --color-paper: var(--paper);
+  --color-paper-ink: var(--paper-ink);
+  --color-paper-muted: var(--paper-muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-serif: var(--font-serif);
@@ -51,10 +201,6 @@
 
 * {
   border-color: var(--border);
-}
-
-html {
-  color-scheme: light;
 }
 
 body {
@@ -139,4 +285,52 @@ b {
 }
 .animate-pulse-dot {
   animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+/* Cross-fade the colors when the brightness level changes. Applied for a third of a second by applyLevel(), and never for readers who prefer reduced motion. */
+.theme-fade,
+.theme-fade *,
+.theme-fade *::before,
+.theme-fade *::after {
+  transition:
+    background-color 0.28s ease,
+    color 0.28s ease,
+    border-color 0.28s ease,
+    fill 0.28s ease,
+    stroke 0.28s ease !important;
+}
+
+/* The brightness slider: a track that previews the five backgrounds, and a thumb that is unmistakably a control on any of them. */
+.level-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  border-radius: 9999px;
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(to right, var(--swatch-bright), var(--swatch-original), var(--swatch-default), var(--swatch-dark), var(--swatch-darkest));
+  cursor: pointer;
+}
+.level-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: var(--fill);
+  border: 4px solid var(--surface);
+  box-shadow: 0 0 0 1.5px var(--deep), 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+}
+.level-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: var(--fill);
+  border: 4px solid var(--surface);
+  box-shadow: 0 0 0 1.5px var(--deep), 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+}
+.level-slider:active::-webkit-slider-thumb {
+  cursor: grabbing;
 }

@@ -1,77 +1,84 @@
 "use client";
 
-import type { ActivityStatus } from "./ActivityWindow";
-import { formatElapsed, useElapsedTimer } from "@/lib/useElapsedTimer";
+import { elapsedOf, formatElapsed, type ActivityActor } from "@/lib/activity/log";
+import { useCurrentActivity, useNow } from "@/lib/activity/hooks";
 import { Icon } from "./Icon";
+import { ThemeControl } from "./ThemeControl";
 
-export interface BackendActivity {
-  status: ActivityStatus;
-  elapsedMs: number | null;
-}
-
+/**
+ * One model's timer. It shows the call running right now on that model, from zero, and when nothing is running the last
+ * call that finished. Every new action is its own activity with its own start, so the timer restarts with each one; it
+ * never carries a previous action's time forward, and an older call finishing late cannot take it over.
+ */
 function TimerPill({
   name,
+  actor,
   active,
-  activity,
   idleLabel,
   activeText,
   inactiveText,
+  hideWhenIdle = false,
+  dotOnPhone = false,
 }: {
   name: string;
-  /** Whether this backend is "on" at all right now (live model / configured) — drives the dot color. */
+  actor: ActivityActor;
+  /** Whether this model is "on" at all right now (live model / configured) — drives the dot color. */
   active: boolean;
-  activity: BackendActivity;
   idleLabel: string;
   activeText: string;
   inactiveText: string;
+  /** For a model that only appears once it has done something (the judge). */
+  hideWhenIdle?: boolean;
+  /** Below the sm breakpoint show just the status dot (the name stays for screen readers): a third pill would not fit a phone's header. */
+  dotOnPhone?: boolean;
 }) {
-  const elapsed = useElapsedTimer(activity.status, activity.elapsedMs);
+  const activity = useCurrentActivity(actor);
+  const status = activity?.status ?? "idle";
+  const now = useNow(status === "pending");
+  if (hideWhenIdle && !activity) return null;
+  const elapsed = activity ? elapsedOf(activity, now) : null;
 
   // The detail is the first thing to go on a narrow header; an in-flight call is the exception, since it is live feedback.
   let detail = idleLabel;
   let detailAlwaysVisible = false;
-  if (activity.status === "pending" && elapsed != null) {
+  if (status === "pending" && elapsed != null) {
     detail = `${formatElapsed(elapsed)}…`;
     detailAlwaysVisible = true;
-  } else if (activity.status === "done" && elapsed != null) detail = `done in ${formatElapsed(elapsed)}`;
-  else if (activity.status === "error") {
+  } else if (status === "done" && elapsed != null) detail = `done in ${formatElapsed(elapsed)}`;
+  else if (status === "error") {
     detail = `error${elapsed != null ? ` (${formatElapsed(elapsed)})` : ""}`;
     detailAlwaysVisible = true;
   }
 
   const dotColor =
-    activity.status === "pending" ? "bg-amber-500 animate-pulse-dot" : active ? "bg-deep" : "bg-muted";
+    status === "pending" ? "bg-amber-500 animate-pulse-dot" : active ? "bg-deep" : "bg-muted";
 
   return (
     <div
       className={`flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-sm font-medium tabular-nums transition-colors ${
-        active || activity.status !== "idle"
+        active || status !== "idle"
           ? "border-deep/15 bg-deep/[0.06] text-deep"
           : "border-border-strong bg-surface text-muted"
       }`}
-      title={active ? activeText : inactiveText}
+      title={activity ? `${activity.label} · ${active ? activeText : inactiveText}` : active ? activeText : inactiveText}
     >
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} />
-      <span>
+      <span className={dotOnPhone ? "sr-only sm:not-sr-only" : undefined}>
         {name.replace(/ AI$/, "")}
         <span className="hidden sm:inline">{name.endsWith(" AI") ? " AI" : ""}</span>
       </span>
-      <span className={detailAlwaysVisible ? "" : "hidden sm:inline"}>· {detail}</span>
+      <span className={detailAlwaysVisible && !dotOnPhone ? "" : "hidden sm:inline"}>· {detail}</span>
     </div>
   );
 }
 
 export function AppHeader({
   typesafeLive,
-  typesafeActivity,
   openaiConfigured,
-  openaiActivity,
   onOpenSettings,
 }: {
   typesafeLive: boolean;
-  typesafeActivity: BackendActivity;
   openaiConfigured: boolean;
-  openaiActivity: BackendActivity;
   onOpenSettings: () => void;
 }) {
   return (
@@ -87,28 +94,40 @@ export function AppHeader({
           {/* Right outer leg — mirrors the left. */}
           <path d="M 235,15 C 265,92 265,158 235,235 C 205,158 205,92 235,15 Z" />
         </svg>
-        <div className="min-w-0 leading-tight max-[379px]:sr-only">
+        <div className="min-w-0 leading-tight max-[429px]:sr-only">
           <h1 className="truncate font-serif text-lg font-extrabold tracking-tight text-deep">Meridian</h1>
           <p className="hidden text-sm font-medium text-muted md:block">AI Context Intake &amp; Contract Risk Copilot</p>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+      {/* Wraps rather than widening the page: two live timers plus the theme and settings buttons do not fit a phone in one row. */}
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
         <TimerPill
           name="TypeSafe AI"
+          actor="typesafe"
           active={typesafeLive}
-          activity={typesafeActivity}
           idleLabel={typesafeLive ? "Live" : "demo mode"}
           activeText="Calling the live Jev model"
           inactiveText="No TYPESAFE_API_KEY — using the local heuristic mock"
         />
         <TimerPill
           name="OpenAI"
+          actor="openai"
           active={openaiConfigured}
-          activity={openaiActivity}
           idleLabel={openaiConfigured ? "Live" : "not configured"}
           activeText="Running a live comparison call against OpenAI"
           inactiveText="No OPENAI_API_KEY — Compare tab shows a structural estimate"
         />
+        <TimerPill
+          name="Judge"
+          actor="judge"
+          active
+          hideWhenIdle
+          dotOnPhone
+          idleLabel="idle"
+          activeText="The independent DeepEval judge scoring an answer"
+          inactiveText="The independent DeepEval judge"
+        />
+        <ThemeControl />
         <button
           onClick={onOpenSettings}
           title="API keys"

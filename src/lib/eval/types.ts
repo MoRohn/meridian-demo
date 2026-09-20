@@ -41,8 +41,12 @@ export interface EvalResult {
   rubric: { id: string; version: string; title: string };
   /** The fixed evaluation steps the judge scored against, verbatim. */
   steps: string[];
+  /** The rubric's score bands over 0-10, so a score can be read as what it means. */
+  bands: { low: number; high: number; outcome: string }[];
   integrity: EvalIntegrity;
   latencyMs: number;
+  /** What the judge call itself cost in USD, or null when it could not be priced. */
+  judgeCostUsd: number | null;
 }
 
 export type EvalOutcome =

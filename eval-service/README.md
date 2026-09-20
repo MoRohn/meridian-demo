@@ -98,7 +98,7 @@ they still need `OPENAI_API_KEY` in the environment or in `eval-service/.env`.
 ## Endpoints
 
 - `POST /evaluate`: `{ kind, backend, input, actual_output, context }` returns `score`, `reason`,
-  `success`, `threshold`, `judge_model`, `rubric {id, version, title}`, `steps`, `integrity`, `latency_ms`.
+  `success`, `threshold`, `judge_model`, `rubric {id, version, title}`, `steps`, `bands` (the rubric's 0-10 score bands and what each means), `integrity`, `latency_ms`, and `judge_cost_usd` (what the judge call itself cost, or `null` when DeepEval has no price for the judge model).
 - `GET /health`: liveness plus judge configuration, threshold, telemetry opt-out, rubric versions.
 - `GET /stats`: in-process counters (evaluations ok/failed, average latency, suspicious inputs, last
   error, per-kind breakdown).
@@ -120,7 +120,7 @@ Evaluate, whether the service is ready, missing its judge key, or offline.
 ```bash
 pytest -q                                                      # free; the judge and the generator's LLM are stubbed
 deepeval test run tests/evals/test_judge_golden.py             # judge quality; real, billed OpenAI calls
-deepeval test run tests/evals/test_judge_golden.py -n 4 --repeat 3 -id judge-v1.1   # parallel + variance
+deepeval test run tests/evals/test_judge_golden.py -n 4 --repeat 3 -id judge-v1.2   # parallel + variance
 python golden/run_golden.py                                    # same cases, human-readable report
 ```
 
@@ -155,6 +155,17 @@ Verified against a deliberately rubber-stamp judge (fixed 0.8): the suite failed
 `golden/run_golden.py` runs the same cases and adds aggregate figures (accuracy per kind, false passes, score
 separation, injection robustness, run-to-run variance) and exits non-zero under 85% accuracy or if any injected
 case fools the judge.
+
+### Why scoring is arithmetic
+
+Whole-number scores in four wide bands make different mistakes look identical: an answer that is a little off and one
+that points the wrong way both land on "4", and the UI shows 40% for both. So the risk and compliance rubrics (v1.2)
+tell the judge to score as arithmetic and report the number: risk starts at 10 and subtracts 3 per unsupported
+rating, 5 for a rating that points the wrong way, and 5 for wrong totals; compliance subtracts 6 per missed problem
+and 5 per false alarm. The bands and the arithmetic are tested to agree (`test_rubrics.py`), and the rubric tells the
+judge that every percentage in the answer is rounded and to accept up to 2 points of rounding difference (the real
+worst case is 1). This is untested against a real judge until there is a key: run the golden suite and check that
+different wrong answers now score differently.
 
 ### Why `top_logprobs=1`
 

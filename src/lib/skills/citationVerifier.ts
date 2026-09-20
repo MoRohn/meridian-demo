@@ -43,7 +43,7 @@ function normalize(text: string): string {
     .toLowerCase();
 }
 
-function locate(
+export function locate(
   authorities: Record<string, string>,
   quote: string | null,
   namedSectionId?: string

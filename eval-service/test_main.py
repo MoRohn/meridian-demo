@@ -88,10 +88,27 @@ def test_happy_path_returns_full_standardized_shape():
     body = r.json()
     assert body["score"] == 0.8 and body["success"] is True and body["threshold"] == main.PASS_THRESHOLD
     assert body["reason"] == "Grounded in the liability clause."
-    assert body["rubric"] == {"id": "risk", "version": "1.1", "title": "Contract risk score"}
+    assert body["rubric"] == {"id": "risk", "version": "1.2", "title": "Contract risk score"}
     assert body["steps"] == list(RUBRICS["risk"].steps)
     assert body["integrity"]["status"] == "clean"
     assert isinstance(body["latency_ms"], int)
+
+
+def test_response_carries_the_rubric_bands_so_a_score_can_be_read_as_a_meaning():
+    body = client.post("/evaluate", json=VALID).json()
+    assert body["bands"] == [{"low": lo, "high": hi, "outcome": outcome} for lo, hi, outcome in RUBRICS["risk"].bands]
+
+
+@pytest.mark.parametrize(
+    "cost, expected",
+    [(0.0123, 0.0123), (0, 0.0), (None, None), (-1, None), (float("nan"), None), (True, None), ("x", None)],
+)
+def test_judge_cost_is_reported_only_when_deepeval_could_price_the_call(cost, expected):
+    StubGEval.evaluation_cost = cost
+    try:
+        assert client.post("/evaluate", json=VALID).json()["judge_cost_usd"] == expected
+    finally:
+        del StubGEval.evaluation_cost
 
 
 def test_judge_uses_the_rubrics_fixed_steps_not_generated_criteria():
@@ -224,6 +241,6 @@ def test_success_and_failure_are_logged_with_metrics_but_never_contract_text(cap
         StubGEval.raises = RuntimeError("boom")
         client.post("/evaluate", json=VALID)
     text = caplog.text
-    assert "eval_ok" in text and "score=0.80" in text and "latency_ms=" in text and "rubric=risk@1.1" in text
+    assert "eval_ok" in text and "score=0.80" in text and "latency_ms=" in text and "rubric=risk@1.2" in text
     assert "eval_failed" in text and "error=judge_error" in text and "exc=RuntimeError" in text
     assert "SECRET-CLAUSE-TEXT" not in text

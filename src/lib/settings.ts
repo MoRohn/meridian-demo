@@ -11,6 +11,11 @@ export interface ApiKeySettings {
   typesafeModel: string;
   openaiApiKey: string;
   openaiModel: string;
+  /**
+   * Evaluate the first result of each action automatically (DeepEval G-Eval). On by default. It is not a key, but it
+   * lives here because the Settings dialog is where a reader controls what spends their judge calls.
+   */
+  autoEvaluate: boolean;
 }
 
 export interface ModelOption {
@@ -42,6 +47,7 @@ export const emptySettings: ApiKeySettings = {
   typesafeModel: DEFAULT_TYPESAFE_MODEL,
   openaiApiKey: "",
   openaiModel: DEFAULT_OPENAI_MODEL,
+  autoEvaluate: true,
 };
 
 export function loadSettings(): ApiKeySettings {
@@ -74,4 +80,9 @@ export function typesafeOverride(settings: ApiKeySettings): { apiKey?: string; m
 export function openaiOverride(settings: ApiKeySettings): { apiKey?: string; model?: string } | undefined {
   if (!settings.openaiApiKey.trim()) return undefined;
   return { apiKey: settings.openaiApiKey.trim(), model: settings.openaiModel.trim() || undefined };
+}
+
+/** Whether first results are evaluated automatically. Settings saved before this option existed count as on. */
+export function autoEvaluateEnabled(settings: ApiKeySettings = loadSettings()): boolean {
+  return settings.autoEvaluate !== false;
 }

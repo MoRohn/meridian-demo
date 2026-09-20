@@ -202,7 +202,7 @@ export function DocumentPanel({
       onDrop={handleDrop}
     >
       {dragging && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl border-4 border-dashed border-accent bg-deep/90 backdrop-blur-sm">
+        <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl border-4 border-dashed border-accent bg-black/80 backdrop-blur-sm">
           <div className="rounded-2xl bg-surface px-6 py-4 text-center shadow-lg">
             <p className="text-lg font-extrabold text-deep">Drop to upload</p>
             <p className="text-sm font-medium text-muted">.pdf · .docx · .txt</p>
@@ -302,18 +302,18 @@ export function DocumentPanel({
 
           {selectedExcerpt ? (
             <div className="flex items-center justify-between gap-3 border-b border-border bg-accent-soft px-4 py-1.5">
-              <p className="truncate text-xs font-semibold text-accent-ink">
+              <p className="truncate text-xs font-semibold text-accent-soft-ink">
                 Selected: see the <span className="underline">Risk</span> and <span className="underline">Compliance</span> tabs for its score, or the <span className="underline">Citations</span> tab to verify it as a quote →
               </p>
               <button
                 onClick={() => onSelectionChange(null)}
-                className="shrink-0 text-xs font-bold text-accent-ink hover:text-deep"
+                className="shrink-0 text-xs font-bold text-accent-soft-ink hover:text-deep"
               >
                 Clear
               </button>
             </div>
           ) : (
-            <p className="border-b border-border bg-accent-soft px-4 py-1.5 text-xs font-semibold text-accent-ink short:hidden">
+            <p className="border-b border-border bg-accent-soft px-4 py-1.5 text-xs font-semibold text-accent-soft-ink short:hidden">
               Highlight any passage: score it in the Risk and Compliance tabs, or drop it straight into the Citations tab as a quote to verify.
             </p>
           )}
@@ -327,17 +327,17 @@ export function DocumentPanel({
                     ref={(el) => {
                       pageRefs.current[i] = el;
                     }}
-                    className="w-full rounded-sm bg-[#fdfcf6] px-5 py-6 shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.12)] sm:px-14 sm:py-14"
+                    className="w-full rounded-sm bg-paper px-5 py-6 shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.12)] sm:px-14 sm:py-14"
                     style={{ aspectRatio: pages.length > 1 ? "8.5 / 11" : undefined, minHeight: pages.length > 1 ? undefined : "auto" }}
                   >
                     <pre
-                      className="whitespace-pre-wrap break-words font-[var(--font-document)] leading-relaxed text-[#1c1a14] select-text"
+                      className="whitespace-pre-wrap break-words font-[var(--font-document)] leading-relaxed text-paper-ink select-text"
                       style={{ fontSize: `${zoom}px` }}
                     >
                       {pageText}
                     </pre>
                     {pages.length > 1 && (
-                      <p className="mt-6 text-center text-xs text-[#a8a290]">
+                      <p className="mt-6 text-center text-xs text-paper-muted">
                         Page {i + 1} of {pages.length}
                       </p>
                     )}

@@ -84,6 +84,21 @@ isn't callable on a given key (a brand-new flagship's staged rollout, for exampl
 OpenAI client transparently retries once against `gpt-4o-mini` and reports the fallback in
 the UI rather than failing the whole comparison — see `OpenAINote` below.
 
+## Display brightness
+
+The sun/moon button in the header opens a five-level brightness slider (drag it, use the arrow keys, or pick a
+name). From brightest to darkest: **Bright** (one step brighter than the original), **Original** (the palette
+Meridian shipped with), **Default** (slightly darker than the original; what a new visitor sees), **Dark**, and
+**Darkest**. The whole UI follows: surfaces, text, status colors, the document page, and the fills for active tabs
+and buttons. The choice applies instantly, is remembered, and is applied before the first paint on your next visit,
+so there is no flash of the wrong palette.
+
+Each level's palette is defined in [`src/app/globals.css`](src/app/globals.css). [`src/lib/themePalette.test.ts`](src/lib/themePalette.test.ts)
+reads that file and checks every level: WCAG AA contrast for every text and surface pair (including status text on
+its tinted chips), that the levels get strictly darker in order, that "default" is only slightly darker than
+"original", and that "original" is still exactly the shipped palette. `npm run test:e2e` scans every level across every
+view with axe. When editing a palette, run those two first.
+
 ## What to click through
 
 1. **Load a sample contract** (top of the left panel) — a one-sided SaaS MSA, a balanced
@@ -114,7 +129,9 @@ the UI rather than failing the whole comparison — see `OpenAINote` below.
    (liability, indemnification, termination), combined with weights that live in
    application code, not a prompt.
 7. Check **Compliance** — four plain yes/no flags with their own probabilities.
-8. Try the **Citations** tab's canned examples — an accurate citation, one that's quoted
+8. Open **Citations** with a document loaded: it lists **suggested citations pulled from that document** (one per
+   recognisable clause type: renewal, indemnity, liability, termination, data, governing law and so on), each a typical claim
+   paired with the clause's own words. Clicking one runs the check against that clause. Then try the tab's playbook examples — an accurate citation, one that's quoted
    correctly but contradicted by its own source, one that's real but doesn't actually
    support the claim built on it, and one that's fabricated outright (never in the source
    at all — caught with zero model calls, by string match alone).
@@ -194,6 +211,12 @@ supports the claim, so it's a real two-step, code-gated sequence — a plain sub
 match (free, instant), then one `Choice` question only for quotes that survive it. This
 mirrors [the citation-check cookbook](https://docs.typesafe.ai/cookbooks/citation_check)
 and is called out in the docs as the correct exception, not the default.
+
+The loaded document is a citation source alongside the playbook: its clauses are split
+([`src/lib/citations/sections.ts`](src/lib/citations/sections.ts)) and keyed `Doc §N` (`Doc ¶N` for text without numbering),
+so a quote taken from it is located and judged against that clause. The suggestions
+([`suggest.ts`](src/lib/citations/suggest.ts)) are computed locally with keyword rules, with no model call and no cost until you
+click one; each quote is a verbatim slice of its clause, which a test asserts for every sample contract.
 
 ### Conversational context / memory
 
@@ -290,8 +313,13 @@ What makes the score trustworthy, and what does not:
 - **Measured, not assumed.** [`eval-service/golden/run_golden.py`](eval-service/golden/run_golden.py)
   scores the judge itself against 27 known-answer cases, including injection attacks.
 
-It's opt-in (a real LLM call) and genuinely optional infrastructure: with the service not running,
-the panel reports "evaluation service unavailable." See [`eval-service/README.md`](eval-service/README.md).
+**It evaluates itself the first time you open each action** (the Trace, Risk, Compliance and Citations panels, and the
+highlighted-excerpt scores), once per action per session, and only when it can work: the service is up, a judge key
+is available, and both backends' answers have arrived. Results are kept for the session, so switching tabs never
+re-runs (or re-bills) anything, and a changed answer waits for you to click **Re-evaluate**. Each run is real, paid
+judge calls with your OpenAI key, so **Settings has a switch to turn auto-evaluation off**. It is otherwise genuinely
+optional infrastructure: with the service not running, the panel says so and offers **Check again**. See
+[`eval-service/README.md`](eval-service/README.md).
 
 ## Mapping to the job description
 

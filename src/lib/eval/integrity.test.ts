@@ -4,7 +4,7 @@ import type { EvalResult } from "./types";
 
 const base: EvalResult = {
   score: 0.8, reason: "r", success: true, threshold: 0.6, judgeModel: "m",
-  rubric: { id: "risk", version: "1.0", title: "t" }, steps: [], latencyMs: 1,
+  rubric: { id: "risk", version: "1.0", title: "t" }, steps: [], bands: [], judgeCostUsd: null, latencyMs: 1,
   integrity: { status: "clean", signals: [], hiddenCharsRemoved: 0 },
 };
 

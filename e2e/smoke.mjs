@@ -117,12 +117,120 @@ for (const [name, [width, height]] of Object.entries(SIZES)) {
   await page.waitForTimeout(250);
   const dialog = await page.evaluate(() => { const d = document.querySelector("[role=dialog]"); return d && { modal: d.getAttribute("aria-modal") === "true", labelled: !!d.getAttribute("aria-labelledby"), focusInside: d.contains(document.activeElement) }; });
   check(!!dialog && dialog.modal && dialog.labelled && dialog.focusInside, "settings dialog: role, aria-modal, label, and focus moved inside", JSON.stringify(dialog));
+  await page.evaluate(axeSource);
+  const dialogViolations = await page.evaluate(async () => (await window.axe.run(document, { resultTypes: ["violations"] })).violations.map((v) => `${v.impact}:${v.id}`));
+  check(dialogViolations.length === 0, "settings dialog: no accessibility violations (including the auto-evaluate checkbox)", dialogViolations.join(", "));
+  check(await page.getByRole("checkbox", { name: /Evaluate the first result of each action automatically/ }).isChecked(), "settings dialog: auto-evaluate is on by default");
   for (let i = 0; i < 12; i++) await page.keyboard.press("Tab");
   check(await page.evaluate(() => document.querySelector("[role=dialog]")?.contains(document.activeElement) ?? false), "settings dialog: Tab is trapped inside");
   await page.keyboard.press("Escape");
   await page.waitForTimeout(250);
   check((await page.locator("[role=dialog]").count()) === 0, "settings dialog: Escape closes it");
   check(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") === "API key settings"), "settings dialog: focus returns to the button that opened it");
+  await ctx.close();
+}
+
+// Brightness: the slider, persistence, and legibility (an axe scan) on every level across every view.
+{
+  const LEVELS = ["bright", "original", "default", "dark", "darkest"];
+  const level = (page) => page.evaluate(() => document.documentElement.getAttribute("data-level"));
+  const axeScan = async (page) => { await page.evaluate(axeSource); return page.evaluate(async () => (await window.axe.run(document, { resultTypes: ["violations"] })).violations.map((v) => `${v.impact}:${v.id}`)); };
+
+  // -- operating the control
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(URL_, { waitUntil: "networkidle" });
+  check((await level(page)) === null, "brightness: a first-time visitor gets the default palette (no override set)");
+  const trigger = page.getByRole("button", { name: /Display brightness/ });
+  check(/Default/.test((await trigger.getAttribute("aria-label")) ?? ""), "brightness: the button names the current level");
+  await trigger.click();
+  const slider = page.getByRole("slider", { name: "Brightness level" });
+  check(await slider.isVisible(), "brightness: opening the control shows a slider");
+  check(await page.evaluate(() => document.activeElement?.getAttribute("aria-label") === "Brightness level"), "brightness: focus moves to the slider");
+  check((await slider.getAttribute("min")) === "0" && (await slider.getAttribute("max")) === "4", "brightness: the slider has exactly five stops");
+  check((await slider.getAttribute("aria-valuetext"))?.startsWith("Default"), "brightness: the slider announces the level's name");
+  await page.keyboard.press("ArrowRight");
+  check((await level(page)) === "dark", "brightness: right arrow goes one level darker");
+  await page.keyboard.press("End");
+  check((await level(page)) === "darkest", "brightness: End goes to the darkest");
+  await page.keyboard.press("Home");
+  check((await level(page)) === "bright", "brightness: Home goes to the brightest");
+  await page.getByRole("button", { name: "Original", exact: true }).click();
+  check((await level(page)) === "original", "brightness: clicking a named stop selects it");
+  check(await page.getByRole("button", { name: "Original", exact: true }).getAttribute("aria-pressed") === "true", "brightness: the chosen stop is marked pressed");
+  await page.getByRole("button", { name: "Reset to default" }).click();
+  check((await level(page)) === "default", "brightness: Reset to default returns to the default");
+  check(await page.getByRole("button", { name: "Reset to default" }).count() === 0, "brightness: no reset link while already on the default");
+  await page.keyboard.press("Escape");
+  check((await page.getByRole("dialog", { name: "Display brightness" }).count()) === 0, "brightness: Escape closes the control");
+  check(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")?.startsWith("Display brightness") ?? false), "brightness: focus returns to the button");
+
+  // -- remembered, and applied before first paint
+  await trigger.click();
+  await page.getByRole("button", { name: "Darkest", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  check((await level(page)) === "darkest", "brightness: the choice is already applied at DOMContentLoaded, before any content paints");
+  await page.evaluate(() => localStorage.setItem("meridian.theme", "not-a-level"));
+  await page.reload({ waitUntil: "networkidle" });
+  check((await level(page)) === null, "brightness: a corrupt saved value falls back to the default instead of breaking the page");
+  await ctx.close();
+
+  // -- every level, every view: legible and accessible
+  for (const lv of LEVELS) {
+    for (const [name, viewport] of [["desktop", { width: 1440, height: 900 }], ["phone", { width: 390, height: 844 }]]) {
+      const c = await browser.newContext({ viewport });
+      const p = await c.newPage();
+      await p.addInitScript((l) => localStorage.setItem("meridian.theme", l), lv);
+      await p.goto(URL_, { waitUntil: "networkidle" });
+      const phone = name === "phone";
+      if (phone) await p.getByRole("button", { name: /^Document/ }).click();
+      await p.getByText("SaaS Master Services Agreement", { exact: false }).first().click();
+      await p.waitForTimeout(2200);
+      const label = `${lv} / ${name}`;
+      check((await level(p)) === lv, `${label}: the level is applied`);
+      const views = phone ? ["Document", "Assistant", "Analysis"] : [null];
+      for (const v of views) {
+        if (v) { await p.getByRole("button", { name: new RegExp("^" + v) }).click(); await p.waitForTimeout(300); }
+        const tabs = !v || v === "Analysis" ? ["Trace", "Risk", "Compliance", "Citations"] : [null];
+        for (const tab of tabs) {
+          if (tab) { await p.getByRole("tab", { name: new RegExp(tab) }).click(); await p.waitForTimeout(450); }
+          const found = await axeScan(p);
+          check(found.length === 0, `${label} / ${v ?? "all panes"}${tab ? " / " + tab : ""}: no accessibility violations`, found.join(", "));
+        }
+      }
+      await p.getByRole("button", { name: /Display brightness/ }).click();
+      await p.waitForTimeout(300);
+      const pop = await axeScan(p);
+      check(pop.length === 0, `${label}: the brightness control itself has no accessibility violations`, pop.join(", "));
+      const fits = await p.evaluate(() => { const d = document.querySelector("[role=dialog]"); if (!d) return null; const r = d.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 1; });
+      check(fits !== false, `${label}: the brightness popover stays inside the screen`);
+      await p.keyboard.press("Escape");
+      await p.getByRole("button", { name: /API key settings/ }).click();
+      await p.waitForTimeout(300);
+      const dlg = await axeScan(p);
+      check(dlg.length === 0, `${label}: the settings dialog has no accessibility violations`, dlg.join(", "));
+      await c.close();
+    }
+  }
+}
+
+// Citations: suggestions are pulled from the loaded document and checked against it.
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await ctx.newPage();
+  await page.goto(URL_, { waitUntil: "networkidle" });
+  await page.getByRole("tab", { name: /Citations/ }).click();
+  check((await page.getByText("Load or upload a document and its clauses appear here").count()) === 1, "citations: with no document, the suggestions area says what to do");
+  await page.getByText("SaaS Master Services Agreement", { exact: false }).first().click();
+  await page.waitForTimeout(600);
+  const cards = page.getByRole("button", { name: /^Check .* citation from / });
+  check((await cards.count()) >= 3, "citations: loading a document fills in suggestions on its own", `${await cards.count()} cards`);
+  check((await page.getByText("Playbook examples").count()) === 1, "citations: the canned examples are labelled as playbook examples");
+  await cards.first().click();
+  await page.getByText(/quote matched verbatim/).first().waitFor({ timeout: 15000 }).catch(() => {});
+  const located = await page.getByText(/Located in section Doc §\d+ \(quote matched verbatim\)/).count();
+  check(located >= 1, "citations: a suggested quote is found in the document, not reported fabricated", `${located} matches`);
   await ctx.close();
 }
 

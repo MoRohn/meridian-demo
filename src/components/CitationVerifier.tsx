@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { CitationCheckResult } from "@/lib/skills/citationVerifier";
 import { CITATION_EXAMPLES } from "@/lib/data/citationExamples";
 import { AUTHORITY_TITLE } from "@/lib/data/authorities";
+import { suggestCitations } from "@/lib/citations/suggest";
 import type { OpenAIRunOutcome } from "@/lib/openai/types";
 import type { KeyOverride } from "@/lib/typesafe/client";
 import { ProbabilityBar } from "./ProbabilityBar";
 import { ActivityWindow, type ActivityStatus } from "./ActivityWindow";
-import type { BackendActivity } from "./AppHeader";
+import type { ActivityFinish, ActivityKind } from "@/lib/activity/log";
+import { openaiActivityResult, typesafeActivityResult } from "@/lib/activity/outcomes";
 import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
@@ -43,6 +45,7 @@ const OPENAI_RELATION_STYLE: Record<string, { verdict: CitationCheckResult["verd
 };
 
 async function compareOpenAICitation(
+  sessionId: string,
   claim: string,
   quote: string | null,
   sectionId: string | undefined,
@@ -51,13 +54,16 @@ async function compareOpenAICitation(
   const res = await fetch("/api/compare-openai-citation", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ claim, quote, sectionId, override }),
+    body: JSON.stringify({ sessionId, claim, quote, sectionId, override }),
   });
   const data = await res.json();
   return data.outcome as OpenAIRunOutcome;
 }
 
 export function CitationVerifier({
+  sessionId,
+  documentName,
+  documentText,
   onVerify,
   openaiConfigured,
   onBeginTypesafeActivity,
@@ -68,6 +74,10 @@ export function CitationVerifier({
   selectedExcerpt,
   onOpenaiMetrics,
 }: {
+  sessionId: string;
+  /** The active document, if one is loaded: its clauses become both the suggestions below and a source a quote can be found in. */
+  documentName?: string | null;
+  documentText?: string | null;
   onVerify: (claim: string, quote: string | null, sectionId?: string) => Promise<CitationCheckResult>;
   openaiConfigured: boolean;
   /**
@@ -77,21 +87,26 @@ export function CitationVerifier({
    * check's own "done"/"error" (or vice versa) — `begin` stakes a claim,
    * `finish` only applies if nothing newer has started since.
    */
-  onBeginTypesafeActivity: () => number;
-  onFinishTypesafeActivity: (epoch: number, activity: BackendActivity) => void;
-  onBeginOpenaiActivity: () => number;
-  onFinishOpenaiActivity: (epoch: number, activity: BackendActivity) => void;
+  onBeginTypesafeActivity: (kind: ActivityKind, label: string) => number;
+  onFinishTypesafeActivity: (id: number, result: ActivityFinish) => void;
+  onBeginOpenaiActivity: (kind: ActivityKind, label: string) => number;
+  onFinishOpenaiActivity: (id: number, result: ActivityFinish) => void;
   openaiOverride?: KeyOverride;
   /** The passage currently highlighted in the Document panel, if any — dropped straight into the quote field so Citations reacts to a highlight exactly like Risk and Compliance do. */
   selectedExcerpt?: string | null;
   /** Reports this check's real OpenAI input/output size up to the Context Window meter — see page.tsx. */
   onOpenaiMetrics?: (metrics: BackendContextMetrics) => void;
 }) {
+  // Pulled straight from the document, deterministically and for free: nothing is sent to a model until one is clicked.
+  const suggestions = useMemo(() => suggestCitations(documentText), [documentText]);
   const [claim, setClaim] = useState("");
   const [quote, setQuote] = useState("");
   const [typesafeStatus, setTypesafeStatus] = useState<ActivityStatus>("idle");
   const [result, setResult] = useState<CitationCheckResult | null>(null);
   const [openaiStatus, setOpenaiStatus] = useState<ActivityStatus>("idle");
+  /** The activity-log record behind each window's timer, replaced on every check so the timer starts again from zero. */
+  const [typesafeActivityId, setTypesafeActivityId] = useState<number | null>(null);
+  const [openaiActivityId, setOpenaiActivityId] = useState<number | null>(null);
   const [openaiOutcome, setOpenaiOutcome] = useState<OpenAIRunOutcome | null>(null);
   /** The exact params behind the result currently on screen, so the retry icon re-runs precisely that check, even after the text fields have since been edited. */
   const [lastRun, setLastRun] = useState<{ claim: string; quote: string; sectionId?: string } | null>(null);
@@ -118,27 +133,30 @@ export function CitationVerifier({
     setQuote(q);
     setLastRun({ claim: c, quote: q, sectionId });
     setTypesafeStatus("pending");
-    const tsEpoch = onBeginTypesafeActivity();
-    const oaEpoch = openaiConfigured ? onBeginOpenaiActivity() : null;
+    const label = `Citation check: ${c.length > 40 ? `${c.slice(0, 40)}…` : c}`;
+    const tsEpoch = onBeginTypesafeActivity("citation", label);
+    const oaEpoch = openaiConfigured ? onBeginOpenaiActivity("citation", label) : null;
+    setTypesafeActivityId(tsEpoch);
+    setOpenaiActivityId(oaEpoch);
     if (openaiConfigured) setOpenaiStatus("pending");
 
     const typesafePromise = onVerify(c, q.trim() ? q : null, sectionId)
       .then((r) => {
         setResult(r);
         setTypesafeStatus("done");
-        onFinishTypesafeActivity(tsEpoch, { status: "done", elapsedMs: r.elapsedMs });
+        // A fabricated quote is rejected by the local exact-text search: no model call, so nothing to time or count.
+        onFinishTypesafeActivity(tsEpoch, r.elapsedMs > 0 ? typesafeActivityResult(r.source === "live" ? "live" : "mock", r.elapsedMs, r.usage) : { status: "done", simulated: true });
       })
-      .catch(() => {
+      .catch((err) => {
         setTypesafeStatus("error");
-        onFinishTypesafeActivity(tsEpoch, { status: "error", elapsedMs: null });
+        onFinishTypesafeActivity(tsEpoch, { status: "error", note: (err as Error).message });
       });
 
     const openaiPromise = openaiConfigured && oaEpoch != null
-      ? compareOpenAICitation(c, q.trim() ? q : null, sectionId, openaiOverride)
+      ? compareOpenAICitation(sessionId, c, q.trim() ? q : null, sectionId, openaiOverride)
           .then((outcome) => {
             setOpenaiOutcome(outcome);
-            const status = outcome?.ok || outcome?.reason === "not_configured" ? "done" : "error";
-            setOpenaiStatus(status);
+            setOpenaiStatus(outcome?.ok || outcome?.reason === "not_configured" ? "done" : "error");
             if (outcome?.ok) {
               onOpenaiMetrics?.({
                 task: "Citation check",
@@ -147,11 +165,11 @@ export function CitationVerifier({
                 outputTokens: outcome.result.usage.output_tokens,
               });
             }
-            onFinishOpenaiActivity(oaEpoch, { status, elapsedMs: outcome?.ok ? outcome.result.elapsedMs : null });
+            onFinishOpenaiActivity(oaEpoch, openaiActivityResult(outcome));
           })
-          .catch(() => {
+          .catch((err) => {
             setOpenaiStatus("error");
-            onFinishOpenaiActivity(oaEpoch, { status: "error", elapsedMs: null });
+            onFinishOpenaiActivity(oaEpoch, { status: "error", note: (err as Error).message });
           })
       : Promise.resolve();
 
@@ -161,25 +179,71 @@ export function CitationVerifier({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted">
-        Checks a claim against <span className="text-secondary">{AUTHORITY_TITLE}</span> in two steps. First, an
+        Checks a claim against {documentText ? "your document and " : ""}
+        <span className="text-secondary">{AUTHORITY_TITLE}</span> in two steps. First, an
         exact-text search locates the quoted section (no model call needed). Then both backends independently judge
         whether that section actually supports the claim.
       </p>
 
-      <div className="flex flex-wrap gap-1.5">
-        {CITATION_EXAMPLES.map((ex) => (
-          <button
-            key={ex.id}
-            onClick={() => runCheck(ex.claim, ex.quote ?? "", ex.sectionId)}
-            className="rounded-full border border-border-strong bg-surface px-2.5 py-1 text-sm text-secondary transition-colors hover:border-deep/30 hover:text-deep"
-          >
-            {ex.label}
-          </button>
-        ))}
+      <section aria-labelledby="cite-suggested" className="space-y-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <p id="cite-suggested" className="text-xs font-bold uppercase tracking-wide text-muted">
+            Suggested from your document
+          </p>
+          {documentText && documentName && <span className="truncate text-xs text-muted">{documentName}</span>}
+        </div>
+        {!documentText ? (
+          <p className="rounded-xl border border-dashed border-border-strong px-3 py-3 text-sm text-muted">
+            Load or upload a document and its clauses appear here as ready-to-check citations.
+          </p>
+        ) : suggestions.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border-strong px-3 py-3 text-sm text-muted">
+            No clauses on a recognisable topic were found in this document. Highlight a passage in the document to use it as the quote.
+          </p>
+        ) : (
+          <ul className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
+            {suggestions.map((sg) => (
+              <li key={sg.id} className="min-w-0">
+                <button
+                  onClick={() => runCheck(sg.claim, sg.quote, sg.id)}
+                  disabled={typesafeStatus === "pending"}
+                  aria-label={`Check ${sg.topicLabel} citation from ${sg.sectionLabel}`}
+                  className="flex h-full w-full flex-col gap-1 rounded-xl border border-border-strong bg-surface p-3 text-left transition-colors hover:border-deep/40 hover:bg-surface-hover disabled:opacity-50"
+                >
+                  <span className="flex items-center justify-between gap-2 text-xs font-bold text-secondary">
+                    <span className="truncate">{sg.sectionLabel}</span>
+                    <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-accent-soft-ink">{sg.topicLabel}</span>
+                  </span>
+                  <span className="text-sm font-semibold text-foreground">{sg.claim}</span>
+                  <span className="line-clamp-2 font-[family-name:var(--font-document)] text-xs italic text-muted">&ldquo;{sg.quote}&rdquo;</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="text-xs text-muted">
+          Each card pairs a typical claim about that kind of clause with the document&rsquo;s own words. Checking it shows whether the
+          clause supports, contradicts or ignores the claim.
+        </p>
+      </section>
+
+      <div className="space-y-1.5">
+        <p className="text-xs font-bold uppercase tracking-wide text-muted">Playbook examples</p>
+        <div className="flex flex-wrap gap-1.5">
+          {CITATION_EXAMPLES.map((ex) => (
+            <button
+              key={ex.id}
+              onClick={() => runCheck(ex.claim, ex.quote ?? "", ex.sectionId)}
+              className="rounded-full border border-border-strong bg-surface px-2.5 py-1 text-sm text-secondary transition-colors hover:border-deep/30 hover:text-deep"
+            >
+              {ex.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {selectedExcerpt && quote === selectedExcerpt && (
-        <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-xs font-semibold text-accent-ink">
+        <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-xs font-semibold text-accent-soft-ink">
           Quote filled in from your highlighted passage — add the claim it&rsquo;s supposedly backing up, then verify.
         </p>
       )}
@@ -232,14 +296,14 @@ export function CitationVerifier({
               )}
             </div>
             <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
-          <ActivityWindow title="TypeSafe" subtitle="locate → Choice" status={typesafeStatus} accent="deep">
+          <ActivityWindow title="TypeSafe" subtitle="locate → Choice" status={typesafeStatus} activityId={typesafeActivityId} accent="deep">
             {typesafeStatus === "pending" && <p className="text-sm font-medium text-secondary">Checking…</p>}
             {typesafeStatus === "error" && <p className="text-sm font-bold text-rose-800">That check failed. Try again.</p>}
             {result && typesafeStatus === "done" && (
               <div className={`space-y-3 rounded-xl border p-3 ${VERDICT_STYLES[result.verdict]}`}>
                 <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                   <span className="text-lg font-extrabold uppercase tracking-wide">{result.verdict}</span>
-                  <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-xs font-bold">
+                  <span className="shrink-0 whitespace-nowrap rounded-full bg-foreground/[0.06] px-2 py-0.5 text-xs font-bold">
                     {result.autoAccept ? "Auto-accepted" : "Needs human review"}
                   </span>
                 </div>
@@ -267,7 +331,7 @@ export function CitationVerifier({
                     {result.sectionText && (
                       <details className="text-sm">
                         <summary className="cursor-pointer font-semibold">Show source section</summary>
-                        <p className="mt-1 whitespace-pre-wrap rounded-lg bg-black/5 p-2 font-mono text-xs leading-relaxed">
+                        <p className="mt-1 whitespace-pre-wrap rounded-lg bg-foreground/[0.06] p-2 font-mono text-xs leading-relaxed">
                           {result.sectionText}
                         </p>
                       </details>
@@ -282,11 +346,12 @@ export function CitationVerifier({
             title="OpenAI"
             subtitle={openaiOutcome?.ok ? openaiOutcome.result.model : openaiConfigured ? "locate → function call" : "not configured"}
             status={openaiStatus}
+            activityId={openaiActivityId}
             accent="violet"
           >
             {!openaiConfigured && (
-              <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-sm text-accent-ink">
-                Set <code className="text-accent-ink">OPENAI_API_KEY</code> to run this check against OpenAI too.
+              <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-sm text-accent-soft-ink">
+                Set <code className="text-accent-soft-ink">OPENAI_API_KEY</code> to run this check against OpenAI too.
               </p>
             )}
             {openaiStatus === "pending" && <p className="text-sm font-medium text-secondary">Checking…</p>}
@@ -306,7 +371,7 @@ export function CitationVerifier({
                       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                         <span className="text-lg font-extrabold uppercase tracking-wide">{style.label}</span>
                         {relationAnswer.selfReportedConfidence != null && (
-                          <span className="shrink-0 whitespace-nowrap rounded-full bg-black/5 px-2 py-0.5 text-xs font-bold">
+                          <span className="shrink-0 whitespace-nowrap rounded-full bg-foreground/[0.06] px-2 py-0.5 text-xs font-bold">
                             self-reported {Math.round(relationAnswer.selfReportedConfidence * 100)}%
                           </span>
                         )}

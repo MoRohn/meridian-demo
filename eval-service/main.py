@@ -99,6 +99,14 @@ class RubricInfo(BaseModel):
     title: str
 
 
+class ScoreBand(BaseModel):
+    """One band of the rubric's 0-10 scale and what a score inside it means."""
+
+    low: int
+    high: int
+    outcome: str
+
+
 class Integrity(BaseModel):
     status: Literal["clean", "suspicious"]
     signals: list[dict[str, str]] = []
@@ -114,8 +122,12 @@ class EvaluateResponse(BaseModel):
     rubric: RubricInfo
     # The fixed evaluation steps the judge scored against its method, verbatim.
     steps: list[str] = []
+    # The rubric's score bands, so a score can be read as "what this means", not just a number.
+    bands: list[ScoreBand] = []
     integrity: Integrity
     latency_ms: int
+    # What the judge call itself cost in USD, when DeepEval could price it (None for a model it has no price for).
+    judge_cost_usd: float | None = None
 
 
 # ---- monitoring -----------------------------------------------------------
@@ -175,6 +187,12 @@ def rubrics():
 # ---- evaluation -----------------------------------------------------------
 
 
+def _judge_cost(metric) -> float | None:
+    """The judge call's USD cost as DeepEval measured it, or None when it has no price for the model."""
+    cost = getattr(metric, "evaluation_cost", None)
+    return float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0 else None
+
+
 # A key that arrives with a request is used for that one call only: never stored, logged, or returned.
 _KEY_FORMAT = re.compile(r"^[\x21-\x7e]{16,300}$")  # printable ASCII, no whitespace
 
@@ -222,8 +240,10 @@ def evaluate(req: EvaluateRequest, x_judge_api_key: str | None = Header(default=
         judge_model=JUDGE_MODEL,
         rubric=RubricInfo(id=rubric.id, version=rubric.version, title=rubric.title),
         steps=list(rubric.steps),
+        bands=[ScoreBand(low=lo, high=hi, outcome=outcome) for lo, hi, outcome in rubric.bands],
         integrity=Integrity(**integrity.to_dict()),
         latency_ms=latency,
+        judge_cost_usd=_judge_cost(metric),
     )
     _record(req.kind, True, latency, suspicious=integrity.status == "suspicious")
     log.info(

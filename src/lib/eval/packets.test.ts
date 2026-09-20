@@ -41,6 +41,10 @@ describe("buildRiskPacket", () => {
     expect(buildRiskPacket({ scope: "document", ratings: [...RATINGS], overall: 0.5, sourceText: null })).toBeNull();
   });
 
+  it("tells the judge every percentage is rounded, so rounding is never mistaken for an arithmetic error", () => {
+    expect(packet.actualOutput).toContain("All percentages are rounded to whole numbers.");
+  });
+
   it("is byte-identical in structure for two backends given the same answers (like-for-like)", () => {
     const a = buildRiskPacket({ scope: "document", ratings: [...RATINGS], overall: 0.65, sourceText: DOC });
     const b = buildRiskPacket({ scope: "document", ratings: [...RATINGS], overall: 0.65, sourceText: DOC });
@@ -49,10 +53,19 @@ describe("buildRiskPacket", () => {
 });
 
 describe("riskBand", () => {
+  it("labels a total by the whole percentage that is displayed, so text and band cannot disagree", () => {
+    for (let n = 0; n <= 1000; n++) {
+      const overall = n / 1000;
+      const shown = Math.round(overall * 100);
+      const expected = shown >= 66 ? "high" : shown >= 33 ? "moderate" : "low";
+      expect(riskBand(overall), `${overall} shows as ${shown}%`).toBe(expected);
+    }
+  });
   it("uses the same edges the packet documents", () => {
     expect(riskBand(0.32)).toBe("low");
     expect(riskBand(0.33)).toBe("moderate");
-    expect(riskBand(0.659)).toBe("moderate");
+    expect(riskBand(0.654)).toBe("moderate");
+    expect(riskBand(0.655)).toBe("high"); // shown as 66%, so labelled like 66%
     expect(riskBand(0.66)).toBe("high");
   });
 });
@@ -117,5 +130,23 @@ describe("buildReplyPacket", () => {
   });
   it("returns null for an empty reply", () => {
     expect(buildReplyPacket({ message: "m", reply: "", risk: null, flags: [], sourceText: null })).toBeNull();
+  });
+});
+
+describe("the rounding tolerance the risk rubric grants", () => {
+  it("covers the worst case: the total recomputed from ROUNDED ratings never differs from the rounded total by more than 1 point", () => {
+    // The rubric lets the judge accept up to 2 points; this shows the real worst case is well inside that, so
+    // a correct answer can never be marked down for arithmetic that rounding alone explains.
+    const W = [0.5, 0.3, 0.2];
+    let worst = 0;
+    let seed = 12345;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (let i = 0; i < 20000; i++) {
+      const r = W.map(() => rand());
+      const overall = r.reduce((s, v, k) => s + v * W[k], 0);
+      const recomputed = r.reduce((s, v, k) => s + Math.round(v * 100) * W[k], 0);
+      worst = Math.max(worst, Math.abs(recomputed - Math.round(overall * 100)));
+    }
+    expect(worst).toBeLessThanOrEqual(1);
   });
 });

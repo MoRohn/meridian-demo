@@ -30,6 +30,24 @@ afterEach(() => {
 });
 const upstream = () => ({ headers: fetchMock.mock.calls[0][1].headers as Record<string, string>, body: fetchMock.mock.calls[0][1].body as string });
 
+describe("POST /api/evaluate result mapping", () => {
+  it("passes the rubric bands and the judge's own cost through", async () => {
+    const bands = [{ low: 0, high: 5, outcome: "bad" }, { low: 6, high: 10, outcome: "good" }];
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ ...OK_RESULT, bands, judge_cost_usd: 0.0012 }) });
+    const POST = await load("http://localhost:8008");
+    const { result } = (await (await post(POST, BODY)).json()).outcome;
+    expect(result.bands).toEqual(bands);
+    expect(result.judgeCostUsd).toBe(0.0012);
+  });
+
+  it("defaults them for an older service that does not send them", async () => {
+    const POST = await load("http://localhost:8008");
+    const { result } = (await (await post(POST, BODY)).json()).outcome;
+    expect(result.bands).toEqual([]);
+    expect(result.judgeCostUsd).toBeNull();
+  });
+});
+
 describe("POST /api/evaluate and the saved key", () => {
   it.each(["http://localhost:8008", "http://127.0.0.1:8008", "https://eval.example.com"])("forwards the key as a header, and only there, to %s", async (url) => {
     const POST = await load(url);

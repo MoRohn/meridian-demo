@@ -93,12 +93,14 @@ export async function POST(req: NextRequest) {
       judgeModel: data.judge_model,
       rubric: data.rubric,
       steps: Array.isArray(data.steps) ? data.steps : [],
+      bands: Array.isArray(data.bands) ? data.bands : [],
       integrity: {
         status: data.integrity?.status === "suspicious" ? "suspicious" : "clean",
         signals: Array.isArray(data.integrity?.signals) ? data.integrity.signals : [],
         hiddenCharsRemoved: data.integrity?.hidden_chars_removed ?? 0,
       },
       latencyMs: data.latency_ms,
+      judgeCostUsd: typeof data.judge_cost_usd === "number" ? data.judge_cost_usd : null,
     };
     const outcome: EvalOutcome = { ok: true, result };
     return respond(outcome);

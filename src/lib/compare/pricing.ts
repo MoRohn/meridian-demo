@@ -33,6 +33,16 @@ export function usdForTokens(tokens: number, pricePerMillion: number): number {
   return (tokens * pricePerMillion) / 1_000_000;
 }
 
+/**
+ * What one TypeSafe call cost. The local demo heuristic (no key) answers on this machine and bills nothing, so only a
+ * live call has a cost, even though its token counts still describe the real context size.
+ */
+export function typesafeCostUsd(source: "live" | "mock", usage: { input_tokens: number; output_tokens: number }): number {
+  return source === "live"
+    ? usdForTokens(usage.input_tokens, TYPESAFE_PRICING.inputPerMillionUsd) + usdForTokens(usage.output_tokens, TYPESAFE_PRICING.outputPerMillionUsd)
+    : 0;
+}
+
 /** Running session cost/token totals shown at the foot of the Reasoning Trace tab. */
 export interface SessionTotals {
   turns: number;

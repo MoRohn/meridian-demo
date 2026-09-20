@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DocumentPanel } from "@/components/DocumentPanel";
 import { ChatConversation, type ChatMessage } from "@/components/ChatConversation";
 import { MobileNav, type MobileView } from "@/components/MobileNav";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import { AppHeader, type BackendActivity } from "@/components/AppHeader";
+import { evalStore } from "@/lib/eval/store";
+import { AppHeader } from "@/components/AppHeader";
+import { activityLog, type ActivityFinish, type ActivityKind } from "@/lib/activity/log";
+import { openaiActivityResult, typesafeActivityResult } from "@/lib/activity/outcomes";
 import { Workspace, type WorkspaceTab } from "@/components/Workspace";
 import { ReasoningTrace } from "@/components/ReasoningTrace";
 import { RiskDashboard } from "@/components/RiskDashboard";
@@ -103,42 +106,20 @@ export default function Home() {
 
   const [sessionTotals, setSessionTotals] = useState<SessionTotals>(emptyTotals);
 
-  // The header's timers reflect whichever activity is CURRENTLY or MOST
-  // RECENTLY running on each backend, from any task — a chat turn, a
-  // citation check, or a highlighted-excerpt analysis — not just the last
-  // chat turn. Kept separate from the chat-specific trace/outcome state
-  // below, since an excerpt or citation check's OpenAI answers have nothing
-  // to do with the chat fan-out's per-question table and must never
-  // overwrite it.
-  const [headerTypesafe, setHeaderTypesafe] = useState<BackendActivity>({ status: "idle", elapsedMs: null });
-  const [headerOpenai, setHeaderOpenai] = useState<BackendActivity>({ status: "idle", elapsedMs: null });
-
-  /**
-   * Three independent flows (a chat turn, an excerpt scan, a citation check)
-   * can all be in flight at once and all report to these same two pills.
-   * Without this guard, an OLDER run's "done" can arrive after a NEWER run's
-   * "pending" and stomp it — the pill freezes on a stale elapsed time while
-   * the real, newer call is still running, or shows the wrong number when it
-   * finishes. Each `begin*` call stakes a claim on the current epoch;
-   * `finish*` only applies if nothing newer has started since.
-   */
-  const typesafeEpoch = useRef(0);
-  const openaiEpoch = useRef(0);
-  function beginTypesafeActivity(): number {
-    const epoch = ++typesafeEpoch.current;
-    setHeaderTypesafe({ status: "pending", elapsedMs: null });
-    return epoch;
+  // Every model call is its own record in the activity log (src/lib/activity/log.ts), with its own start time. The header
+  // timers, the activity windows and the activity trace all read from it, so each action starts a fresh timer from zero
+  // and a slow older call finishing late can only ever update its own record, never a newer action's timer.
+  function beginTypesafeActivity(kind: ActivityKind, label: string): number {
+    return activityLog.begin("typesafe", kind, label);
   }
-  function finishTypesafeActivity(epoch: number, activity: BackendActivity) {
-    if (epoch === typesafeEpoch.current) setHeaderTypesafe(activity);
+  function finishTypesafeActivity(id: number, result: ActivityFinish) {
+    activityLog.finish(id, result);
   }
-  function beginOpenaiActivity(): number {
-    const epoch = ++openaiEpoch.current;
-    setHeaderOpenai({ status: "pending", elapsedMs: null });
-    return epoch;
+  function beginOpenaiActivity(kind: ActivityKind, label: string): number {
+    return activityLog.begin("openai", kind, label);
   }
-  function finishOpenaiActivity(epoch: number, activity: BackendActivity) {
-    if (epoch === openaiEpoch.current) setHeaderOpenai(activity);
+  function finishOpenaiActivity(id: number, result: ActivityFinish) {
+    activityLog.finish(id, result);
   }
 
   const [uploading, setUploading] = useState(false);
@@ -216,8 +197,8 @@ export default function Home() {
     setLastMessage(text);
     setOpenaiTurn(null); // never pair a new TypeSafe reply with OpenAI's reply to the previous message
     setSending(true);
-    const tsEpoch = beginTypesafeActivity();
-    const oaEpoch = openaiConfigured ? beginOpenaiActivity() : null;
+    const tsEpoch = beginTypesafeActivity("chat", text);
+    const oaEpoch = openaiConfigured ? beginOpenaiActivity("chat", text) : null;
 
     const chatPromise = callApi({
       action: "message",
@@ -254,7 +235,7 @@ export default function Home() {
           inputTokens: result.usage.input_tokens,
           outputTokens: result.usage.output_tokens,
         });
-        finishTypesafeActivity(tsEpoch, { status: "done", elapsedMs: result.elapsedMs });
+        finishTypesafeActivity(tsEpoch, typesafeActivityResult(result.source, result.elapsedMs, result.usage));
         setLive(Boolean(data.live));
         setOpenaiConfigured(Boolean(data.openaiConfigured));
         setContextFacts(data.session?.contextFacts ?? {});
@@ -276,7 +257,7 @@ export default function Home() {
         }));
       })
       .catch((err) => {
-        finishTypesafeActivity(tsEpoch, { status: "error", elapsedMs: null });
+        finishTypesafeActivity(tsEpoch, { status: "error", note: (err as Error).message });
         setMessages((m) => [...m, { role: "assistant", text: `Error: ${(err as Error).message}` }]);
       })
       .finally(() => setSending(false));
@@ -293,8 +274,7 @@ export default function Home() {
               const outcome = data.outcome;
               setOpenaiOutcome(outcome);
               setOpenaiTurn(data.turn ?? null);
-              const status = outcome?.ok || outcome?.reason === "not_configured" ? "done" : "error";
-              finishOpenaiActivity(oaEpoch, { status, elapsedMs: outcome?.ok ? outcome.result.elapsedMs : null });
+              finishOpenaiActivity(oaEpoch, openaiActivityResult(outcome));
               if (outcome?.ok) {
                 const result = outcome.result;
                 setOpenaiMetrics({
@@ -318,8 +298,8 @@ export default function Home() {
                 }));
               }
             })
-            .catch(() => {
-              finishOpenaiActivity(oaEpoch, { status: "error", elapsedMs: null });
+            .catch((err) => {
+              finishOpenaiActivity(oaEpoch, { status: "error", note: (err as Error).message });
             })
         : Promise.resolve();
 
@@ -350,8 +330,8 @@ export default function Home() {
     }
 
     setExcerptStatus("pending");
-    const tsEpoch = beginTypesafeActivity();
-    const oaEpoch = openaiConfigured ? beginOpenaiActivity() : null;
+    const tsEpoch = beginTypesafeActivity("excerpt", "Excerpt scan");
+    const oaEpoch = openaiConfigured ? beginOpenaiActivity("excerpt", "Excerpt scan") : null;
 
     const tsPromise = fetch("/api/analyze-excerpt", {
       method: "POST",
@@ -371,11 +351,11 @@ export default function Home() {
           inputTokens: data.usage.input_tokens,
           outputTokens: data.usage.output_tokens,
         });
-        finishTypesafeActivity(tsEpoch, { status: "done", elapsedMs: data.elapsedMs });
+        finishTypesafeActivity(tsEpoch, typesafeActivityResult(data.source === "live" ? "live" : "mock", data.elapsedMs, data.usage));
       })
-      .catch(() => {
+      .catch((err) => {
         setExcerptStatus("error");
-        finishTypesafeActivity(tsEpoch, { status: "error", elapsedMs: null });
+        finishTypesafeActivity(tsEpoch, { status: "error", note: (err as Error).message });
       });
 
     const oaPromise =
@@ -389,7 +369,6 @@ export default function Home() {
             .then((data: { outcome: OpenAIRunOutcome }) => {
               const outcome = data.outcome;
               setExcerptOaOutcome(outcome);
-              const status = outcome?.ok || outcome?.reason === "not_configured" ? "done" : "error";
               if (outcome?.ok) {
                 setOpenaiMetrics({
                   task: "Excerpt scan",
@@ -398,9 +377,9 @@ export default function Home() {
                   outputTokens: outcome.result.usage.output_tokens,
                 });
               }
-              finishOpenaiActivity(oaEpoch, { status, elapsedMs: outcome?.ok ? outcome.result.elapsedMs : null });
+              finishOpenaiActivity(oaEpoch, openaiActivityResult(outcome));
             })
-            .catch(() => finishOpenaiActivity(oaEpoch, { status: "error", elapsedMs: null }))
+            .catch((err) => finishOpenaiActivity(oaEpoch, { status: "error", note: (err as Error).message }))
         : Promise.resolve();
 
     await Promise.all([tsPromise, oaPromise]);
@@ -530,17 +509,15 @@ export default function Home() {
       setComplianceFlags([]);
       setOpenaiOutcome(null);
       setOpenaiTurn(null);
+      evalStore.reset(); // a new session gets its first-time evaluations again
       setLastMessage(null);
       setLastReply(null);
       setContextStats(null);
       setTypesafeMetrics(null);
       setOpenaiMetrics(null);
-      // Bump both epochs so any still-in-flight request from before the
-      // reset can no longer write a stale "done"/"error" over this idle state.
-      typesafeEpoch.current += 1;
-      openaiEpoch.current += 1;
-      setHeaderTypesafe({ status: "idle", elapsedMs: null });
-      setHeaderOpenai({ status: "idle", elapsedMs: null });
+      // Clearing the log also orphans any still-in-flight call from before the reset: when it lands, its record is gone,
+      // so it can no longer write a stale "done"/"error" over this idle state.
+      activityLog.reset();
       setSelectedExcerpt(null);
       setExcerptStatus("idle");
       setExcerptRisk(null);
@@ -624,9 +601,7 @@ export default function Home() {
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <AppHeader
         typesafeLive={effectiveTypesafeLive}
-        typesafeActivity={headerTypesafe}
         openaiConfigured={effectiveOpenaiConfigured}
-        openaiActivity={headerOpenai}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <SettingsModal
@@ -681,7 +656,6 @@ export default function Home() {
                     source={traceSource}
                     openaiOutcome={openaiOutcome}
                     openaiConfigured={openaiConfigured}
-                    sessionTotals={sessionTotals}
                     onRerun={lastMessage ? handleRerunTrace : undefined}
                     rerunPending={sending}
                     lastMessage={lastMessage}
@@ -727,6 +701,9 @@ export default function Home() {
                 ),
                 citation: (
                   <CitationVerifier
+                    sessionId={sessionId}
+                    documentName={activeDocument?.name}
+                    documentText={activeDocument?.text}
                     onVerify={handleVerifyCitation}
                     openaiConfigured={openaiConfigured}
                     onBeginTypesafeActivity={beginTypesafeActivity}

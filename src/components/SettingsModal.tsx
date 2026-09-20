@@ -104,6 +104,24 @@ export function SettingsModal({
           onClear={() => handleClearProvider("openai")}
         />
 
+        <div className="my-4 border-t border-border" />
+
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={draft.autoEvaluate}
+            onChange={(e) => update("autoEvaluate", e.target.checked)}
+            className="mt-1 h-4 w-4 shrink-0 accent-[var(--deep)]"
+          />
+          <span className="text-sm">
+            <span className="block font-bold text-foreground">Evaluate the first result of each action automatically</span>
+            <span className="block text-xs leading-relaxed text-muted">
+              DeepEval G-Eval judges each backend&rsquo;s answer the first time you open an action. This makes paid judge calls with your OpenAI
+              key; turn it off to evaluate only when you click Evaluate.
+            </span>
+          </span>
+        </label>
+
         <div className="mt-6 flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -113,7 +131,7 @@ export function SettingsModal({
           </button>
           <button
             onClick={handleSave}
-            className="rounded-full bg-deep px-4 py-2 text-sm font-bold text-accent transition-opacity hover:opacity-90"
+            className="rounded-full bg-fill px-4 py-2 text-sm font-bold text-on-fill transition-opacity hover:opacity-90"
           >
             Save
           </button>

@@ -10,11 +10,13 @@ export function PillButton({
   const base = "group inline-flex items-center gap-2 rounded-full py-1.5 pl-4 pr-1.5 text-base font-medium transition-all disabled:opacity-40";
   const variants = {
     accent: "bg-accent text-accent-ink hover:bg-accent-strong",
-    deep: "bg-deep text-accent hover:bg-deep-alt",
+    deep: "bg-fill text-on-fill hover:bg-fill-alt",
   };
+  // Each arrow disc is the inverse of its own button, so it stays visible on every brightness level (a lime disc on the
+  // lime fill the dark levels use would disappear).
   const discVariants = {
-    accent: "bg-deep text-accent",
-    deep: "bg-accent text-accent-ink",
+    accent: "bg-accent-ink text-accent",
+    deep: "bg-on-fill text-fill",
   };
   return (
     <button className={`${base} ${variants[variant]} ${className}`} {...props}>

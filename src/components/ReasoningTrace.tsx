@@ -1,7 +1,5 @@
 import type { TraceEntry } from "@/lib/orchestrator/run";
 import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
-import type { SessionTotals } from "@/lib/compare/pricing";
-import { fmtUsd } from "@/lib/compare/pricing";
 import { agrees, agreementSummary, openaiAnswerFor, typesafeSummary } from "@/lib/compare/agreement";
 import { ProbabilityBar } from "./ProbabilityBar";
 import { OpenAINote } from "./OpenAINote";
@@ -11,6 +9,7 @@ import { Icon } from "./Icon";
 import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
 import { questionLabel } from "@/lib/trace/labels";
 import { EvaluationPanel } from "./EvaluationPanel";
+import { ActivityTrace, PerformancePanel } from "./ModelPerformance";
 import { buildReplyPacket } from "@/lib/eval/packets";
 import type { ComplianceFlag } from "@/lib/orchestrator/run";
 import type { CompositeRisk } from "@/lib/skills/clauseRisk";
@@ -28,7 +27,6 @@ export function ReasoningTrace({
   source,
   openaiOutcome,
   openaiConfigured,
-  sessionTotals,
   onRerun,
   rerunPending,
   lastMessage,
@@ -41,7 +39,6 @@ export function ReasoningTrace({
   source: "live" | "mock";
   openaiOutcome: OpenAIRunOutcome | null;
   openaiConfigured: boolean;
-  sessionTotals: SessionTotals;
   /** Re-sends the last chat message to refresh this trace. Omitted (no button shown) until at least one message has been sent. */
   onRerun?: () => void;
   rerunPending?: boolean;
@@ -56,11 +53,15 @@ export function ReasoningTrace({
 }) {
   if (trace.length === 0) {
     return (
-      <p className="text-base text-secondary">
-        Send a message to see the Jev call: every applicable skill&rsquo;s questions, asked together in one
-        request, with the answers your code actually used highlighted, and right next to each one, what OpenAI
-        returns for the identical question.
-      </p>
+      <div className="space-y-3">
+        <p className="text-base text-secondary">
+          Send a message to see the Jev call: every applicable skill&rsquo;s questions, asked together in one
+          request, with the answers your code actually used highlighted, and right next to each one, what OpenAI
+          returns for the identical question.
+        </p>
+        <ActivityTrace />
+        <PerformancePanel />
+      </div>
     );
   }
 
@@ -90,8 +91,8 @@ export function ReasoningTrace({
       </p>
 
       {!openaiConfigured && (
-        <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-sm text-accent-ink">
-          Set <code className="text-accent-ink">OPENAI_API_KEY</code> to see OpenAI&rsquo;s answer next to every
+        <p className="rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-sm text-accent-soft-ink">
+          Set <code className="text-accent-soft-ink">OPENAI_API_KEY</code> to see OpenAI&rsquo;s answer next to every
           judgment below.
         </p>
       )}
@@ -149,25 +150,8 @@ export function ReasoningTrace({
         />
       )}
 
-      {sessionTotals.turns > 0 && (
-        <div className="rounded-xl border border-border bg-surface p-3 text-sm">
-          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">
-            Session: {sessionTotals.turns} turn{sessionTotals.turns === 1 ? "" : "s"}
-          </p>
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <span className="shrink-0 text-muted">TypeSafe cost</span>
-              <span className="shrink-0 font-bold tabular-nums text-foreground">{fmtUsd(sessionTotals.typesafe.costUsd)}</span>
-            </div>
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <span className="shrink-0 text-muted">OpenAI cost</span>
-              <span className="shrink-0 font-bold tabular-nums text-foreground">
-                {sessionTotals.openai.calls > 0 ? fmtUsd(sessionTotals.openai.costUsd) : "not run"}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
+      <PerformancePanel />
+      <ActivityTrace />
     </div>
   );
 }

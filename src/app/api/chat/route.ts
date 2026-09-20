@@ -4,7 +4,7 @@ import { handleTurn } from "@/lib/orchestrator/run";
 import { loadDocument } from "@/lib/orchestrator/state";
 import { findSampleContract } from "@/lib/data/sampleContracts";
 import { verifyCitation } from "@/lib/skills/citationVerifier";
-import { AUTHORITY_SECTIONS } from "@/lib/data/authorities";
+import { citationSources } from "@/lib/citations/sources";
 import { isLive, type KeyOverride } from "@/lib/typesafe/client";
 import { isOpenAIConfigured } from "@/lib/openai/client";
 
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
         if (!body.claim || !body.claim.trim()) {
           return NextResponse.json({ error: "claim is required" }, { status: 400 });
         }
-        const result = await verifyCitation(AUTHORITY_SECTIONS, body.claim, body.quote, body.sectionId, body.typesafeOverride);
+        const result = await verifyCitation(citationSources(body.sessionId), body.claim, body.quote, body.sectionId, body.typesafeOverride);
         return NextResponse.json({
           result,
           live: isLive(body.typesafeOverride),

@@ -52,8 +52,13 @@ export const RISK_BANDS = { moderateFrom: 0.33, highFrom: 0.66 } as const;
 export type RiskBand = "low" | "moderate" | "high";
 export const RISK_BAND_LABELS: Record<RiskBand, string> = { low: "Low risk", moderate: "Moderate risk", high: "High risk" };
 
+/**
+ * The band for an overall risk. It is taken from the figure as it is SHOWN (a whole percentage): a total of 0.655 is
+ * displayed as 66%, so it must not be labelled with the band that 65.5% falls in while the text beside it says 66%.
+ */
 export function riskBand(overall: number): RiskBand {
-  return overall >= RISK_BANDS.highFrom ? "high" : overall >= RISK_BANDS.moderateFrom ? "moderate" : "low";
+  const shown = Math.round(overall * 100) / 100;
+  return shown >= RISK_BANDS.highFrom ? "high" : shown >= RISK_BANDS.moderateFrom ? "moderate" : "low";
 }
 
 export const clauseRiskSkill: Skill<TurnContext> = {

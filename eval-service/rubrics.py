@@ -45,7 +45,7 @@ class Rubric:
 RUBRICS: dict[str, Rubric] = {
     "risk": Rubric(
         id="risk",
-        version="1.1",
+        version="1.2",
         title="Contract risk score",
         task_line="Judge a contract risk assessment produced by an AI system.",
         steps=(
@@ -55,27 +55,29 @@ RUBRICS: dict[str, Rubric] = {
             "For each of the three ratings in the ANSWER (liability exposure, indemnification harshness, termination "
             "rigidity), find the clause(s) that govern it and decide which described scale level (0%, 50% or 100%) the "
             "clause language best matches. A rating is supported when it is within 25 percentage points of your own "
-            "reading.",
+            "reading. Every percentage in the ANSWER is rounded to a whole number.",
             "If the SOURCE TEXT is silent on a dimension: for a full contract, rate it by the closest level "
             "description (silence about a cap is not a cap); for an excerpt that simply does not cover the dimension, "
             "only a mid-range rating is supported and a confident extreme rating is not.",
-            "Recompute the overall score from the stated ratings and weights. It must match the ANSWER's overall "
-            "figure within 1 percentage point, and the risk band label must match the stated band thresholds.",
-            "Scoring: 10 only if all three ratings are supported and the arithmetic and band are correct. Deduct "
-            "heavily for each unsupported rating. A rating pointing the wrong way (for example low risk for an "
-            "uncapped, one-sided clause, or high risk for a mutual capped one) caps the score at 3. Wrong arithmetic "
-            "or band deducts further. " + _NO_STYLE,
+            "Recompute the overall figure from the stated ratings and weights. Because every figure is rounded, accept a "
+            "difference of up to 2 percentage points. The risk band label must match the stated thresholds for the "
+            "stated overall figure.",
+            "Scoring, as arithmetic so that different mistakes get different scores: start at 10. Subtract 3 for each "
+            "rating that is unsupported. For a rating that points the wrong way (for example low risk for an "
+            "uncapped, one-sided clause, or high risk for a mutual capped one) subtract 5 instead of 3. Subtract 5 if "
+            "the overall figure or the band is wrong. Never go below 0, and report the resulting number. "
+            + _NO_STYLE,
         ),
         bands=(
-            (0, 3, "At least one rating points the wrong way for what the clause actually says."),
-            (4, 5, "Several ratings are unsupported, or the arithmetic or risk band is wrong."),
-            (6, 8, "Every rating is supported by the source text, with minor imprecision."),
+            (0, 3, "Two or more serious problems: a rating points the wrong way and another rating or the totals are also wrong."),
+            (4, 5, "Two ratings are unsupported, or one rating points the wrong way, or the totals are wrong."),
+            (6, 8, "At most one rating is unsupported, and the arithmetic and band are right."),
             (9, 10, "Every rating is supported and the arithmetic and band are exactly right."),
         ),
     ),
     "compliance": Rubric(
         id="compliance",
-        version="1.1",
+        version="1.2",
         title="Compliance flags",
         task_line="Judge a set of contract compliance flags produced by an AI system.",
         steps=(
@@ -87,12 +89,13 @@ RUBRICS: dict[str, Rubric] = {
             "A decision is correct when FLAGGED matches a TRUE condition and clear matches a FALSE condition.",
             "Missing a real problem (clear when the condition is TRUE) is a more serious error than a false alarm "
             "(FLAGGED when the condition is FALSE).",
-            "Scoring: 10 if every decision is correct. Deduct about 2 points per false alarm and about 3 points per "
-            "missed problem. If most decisions are wrong the score must be 3 or below. " + _NO_STYLE,
+            "Scoring, as arithmetic so that different mistakes get different scores: start at 10. Subtract 6 for each "
+            "missed problem and 5 for each false alarm. Never go below 0, and if two or more decisions are wrong the "
+            "score is at most 3. Report the resulting number. " + _NO_STYLE,
         ),
         bands=(
-            (0, 3, "Most decisions are wrong, or several real problems were missed."),
-            (4, 5, "One or two decisions are wrong."),
+            (0, 3, "Two or more decisions are wrong."),
+            (4, 5, "Exactly one decision is wrong."),
             (6, 8, "Every decision is correct, with at most one defensible borderline call."),
             (9, 10, "Every decision is correct."),
         ),

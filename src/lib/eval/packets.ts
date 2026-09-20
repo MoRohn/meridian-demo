@@ -71,7 +71,7 @@ export function buildRiskPacket(args: {
     input: `Rate the overall risk of this contract on liability, indemnification and termination.\n${scopeLine(scope)}`,
     actualOutput: [
       `Overall risk: ${pct(overall)} (${RISK_BAND_LABELS[riskBand(overall)]})`,
-      `Method: overall = ${method}. Each rating is a percentage of the top level.`,
+      `Method: overall = ${method}. Each rating is a percentage of the top level. All percentages are rounded to whole numbers.`,
       `Bands: ${bands}`,
       "",
       "Ratings:",

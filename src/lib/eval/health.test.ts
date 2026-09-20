@@ -39,7 +39,7 @@ describe("describeHealth with a key saved in Settings", () => {
 });
 
 describe("evalLogLine", () => {
-  const ok = { ok: true as const, result: { score: 0.8123, reason: "SECRET CONTRACT REASON", success: true, threshold: 0.6, judgeModel: "m", rubric: { id: "risk", version: "1.1", title: "t" }, steps: ["s"], integrity: { status: "suspicious" as const, signals: [], hiddenCharsRemoved: 0 }, latencyMs: 812 } };
+  const ok = { ok: true as const, result: { score: 0.8123, reason: "SECRET CONTRACT REASON", success: true, threshold: 0.6, judgeModel: "m", rubric: { id: "risk", version: "1.1", title: "t" }, steps: ["s"], bands: [], judgeCostUsd: null, integrity: { status: "suspicious" as const, signals: [], hiddenCharsRemoved: 0 }, latencyMs: 812 } };
   it("records what monitoring needs and never the judged text", () => {
     const line = evalLogLine({ kind: "risk", backend: "typesafe", outcome: ok, ms: 950 });
     expect(JSON.parse(line)).toEqual({ evt: "eval", kind: "risk", backend: "typesafe", ok: true, score: 0.81, success: true, rubric: "risk@1.1", integrity: "suspicious", judgeMs: 812, ms: 950 });

@@ -110,8 +110,8 @@ function ExcerptComplianceSection({
   const preview = selectedExcerpt.length > 160 ? `${selectedExcerpt.slice(0, 160)}…` : selectedExcerpt;
   return (
     <div className="animate-in space-y-2 rounded-xl border-2 border-accent bg-accent-soft p-4">
-      <p className="text-xs font-bold uppercase tracking-wide text-accent-ink">Selected excerpt</p>
-      <p className="border-l-2 border-accent-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
+      <p className="text-xs font-bold uppercase tracking-wide text-accent-soft-ink">Selected excerpt</p>
+      <p className="border-l-2 border-accent-soft-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
       {excerptStatus === "pending" ? (
         <p className="text-sm font-semibold text-muted">Checking…</p>
       ) : excerptStatus === "error" ? (
@@ -129,6 +129,7 @@ function ExcerptComplianceSection({
       {excerptStatus === "done" && excerptFlags.length > 0 && (
         <EvaluationPanel
           kind="compliance"
+          scope="compliance:excerpt"
           typesafePacket={buildCompliancePacket({ scope: "excerpt", decisions: typesafeDecisions(excerptFlags), sourceText: selectedExcerpt })}
           typesafeSource={typesafeSource}
           openaiPacket={buildCompliancePacket({ scope: "excerpt", decisions: openaiDecisions(excerptFlags, excerptOpenaiOutcome), sourceText: selectedExcerpt })}
