@@ -4,6 +4,7 @@ import { buildTurnRequest } from "@/lib/orchestrator/run";
 import { runOpenAIEquivalent, isOpenAIConfigured } from "@/lib/openai/client";
 import { openaiAnswersToTyped } from "@/lib/openai/answers";
 import { composeTurn } from "@/lib/orchestrator/compose";
+import { writeReply } from "@/lib/chat/answer";
 import type { OpenAITurn } from "@/lib/openai/types";
 import type { KeyOverride } from "@/lib/typesafe/client";
 
@@ -36,8 +37,11 @@ export async function POST(req: NextRequest) {
     // flag probability, because OpenAI has only a self-reported confidence and no calibrated probability to cite.
     let turn: OpenAITurn | null = null;
     if (outcome.ok) {
-      const composed = composeTurn(snapshot, openaiAnswersToTyped(outcome.result.answers, questions), { citeFlagProbability: false });
-      turn = { reply: composed.reply, intent: composed.intent, risk: composed.risk, complianceFlags: composed.complianceFlags, blocked: composed.blocked };
+      const typed = openaiAnswersToTyped(outcome.result.answers, questions);
+      const composed = composeTurn(snapshot, typed, { citeFlagProbability: false });
+      // The same writer as TypeSafe's turn, fed OpenAI's own judgments, so the two replies differ only where the judgments do.
+      const written = await writeReply({ message: body.message.trim(), session: snapshot, answers: typed, composed, citeFlagProbability: false, override: body.override });
+      turn = { reply: written.reply, intent: composed.intent, risk: composed.risk, complianceFlags: composed.complianceFlags, blocked: composed.blocked, answer: written.answer };
     }
 
     return NextResponse.json({

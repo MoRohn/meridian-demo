@@ -225,22 +225,28 @@ for (const [name, [width, height]] of Object.entries(SIZES)) {
   }
 }
 
-// Citations: suggestions are pulled from the loaded document and checked against it.
+// Citations: the loaded document is read and checked automatically. Nothing is typed in or clicked.
 {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();
   await page.goto(URL_, { waitUntil: "networkidle" });
   await page.getByRole("tab", { name: /Citations/ }).click();
-  check((await page.getByText("Load or upload a document and its clauses appear here").count()) === 1, "citations: with no document, the suggestions area says what to do");
+  check((await page.getByText("Load or upload a document, and its citations and key terms are found and checked here automatically.").count()) === 1, "citations: with no document, the tab says what will happen");
   await page.getByText("SaaS Master Services Agreement", { exact: false }).first().click();
-  await page.waitForTimeout(600);
-  const cards = page.getByRole("button", { name: /^Check .* citation from / });
-  check((await cards.count()) >= 3, "citations: loading a document fills in suggestions on its own", `${await cards.count()} cards`);
-  check((await page.getByText("Playbook examples").count()) === 1, "citations: the canned examples are labelled as playbook examples");
-  await cards.first().click();
-  await page.getByText(/quote matched verbatim/).first().waitFor({ timeout: 15000 }).catch(() => {});
-  const located = await page.getByText(/Located in section Doc §\d+ \(quote matched verbatim\)/).count();
-  check(located >= 1, "citations: a suggested quote is found in the document, not reported fabricated", `${located} matches`);
+  const table = page.getByRole("table", { name: "Citation checks" });
+  await table.waitFor({ timeout: 15000 }).catch(() => {});
+  check((await table.count()) === 1, "citations: loading a document produces the checks table on its own, with no click");
+  const rows = await table.locator("tbody tr").count();
+  check(rows >= 8, "citations: it lists the group header and a row per key term found in the document", `${rows} rows`);
+  for (const term of ["Liability cap", "Termination", "Indemnification", "Governing law"]) check((await table.getByText(term, { exact: true }).count()) >= 1, `citations: the ${term} check is in the table`);
+  check((await table.getByText("Missing").count()) >= 1, "citations: an essential term the document lacks (governing law) is reported missing");
+  await page.waitForFunction(() => /Contradicted/.test(document.querySelector('table[aria-label="Citation checks"]')?.textContent ?? ""), null, { timeout: 15000 }).catch(() => {});
+  check((await table.getByText("Contradicted").count()) >= 1, "citations: the model's verdicts arrive in the table, in the same words as everywhere");
+  check((await page.getByText("supported:").count()) + (await page.getByText("contradicted:").count()) >= 1, "citations: the summary bar counts the results");
+  for (const gone of ["Claim being made", "Quoted text supposedly backing it up", "Verify citation", "Playbook examples", "Suggested from your document"]) {
+    check((await page.getByText(gone).count()) === 0 && (await page.getByPlaceholder(gone).count()) === 0, `citations: the old "${gone}" input is gone`);
+  }
+  check((await page.locator("textarea").count()) === 0, "citations: there is nothing to type into");
   await ctx.close();
 }
 

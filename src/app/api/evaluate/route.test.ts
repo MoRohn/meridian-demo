@@ -109,3 +109,86 @@ describe("POST /api/evaluate and the saved key", () => {
     expect(logs.join("\n")).toContain("fetch failed"); // ...but the operator's log keeps it
   });
 });
+
+describe("POST /api/evaluate: who judges", () => {
+  it("forwards the chosen provider and model as headers, with that provider's key, and none of it in the body", async () => {
+    const POST = await load("http://localhost:8008");
+    await post(POST, { ...BODY, override: { apiKey: "sk-ant-api03-JUDGEKEY0000000000", provider: "anthropic", model: "claude-sonnet-5" } });
+    const { headers, body } = upstream();
+    expect(headers["X-Judge-Provider"]).toBe("anthropic");
+    expect(headers["X-Judge-Model"]).toBe("claude-sonnet-5");
+    expect(headers["X-Judge-Api-Key"]).toBe("sk-ant-api03-JUDGEKEY0000000000");
+    expect(body).not.toContain("claude-sonnet-5");
+    expect(body).not.toContain("JUDGEKEY");
+  });
+
+  it("sends no provider or model headers when none was chosen, as before", async () => {
+    const POST = await load("http://localhost:8008");
+    await post(POST, { ...BODY, override: { apiKey: KEY } });
+    expect(upstream().headers["X-Judge-Provider"]).toBeUndefined();
+    expect(upstream().headers["X-Judge-Model"]).toBeUndefined();
+    expect(upstream().headers["X-Judge-Api-Key"]).toBe(KEY);
+  });
+
+  it.each([["grok"], ["ANTHROPIC"], [""], ["openai\nX-Injected: 1"]])("rejects an unknown provider %j before any request is made", async (provider) => {
+    const POST = await load("http://localhost:8008");
+    const res = await post(POST, { ...BODY, override: { apiKey: KEY, provider } });
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([["gpt 4o"], ["gpt-4o; drop"], ["x".repeat(101)], ["a\r\nX-Injected: 1"], ["-lead"], [42]])("rejects a model that is not shaped like a model id: %j", async (model) => {
+    const POST = await load("http://localhost:8008");
+    const res = await post(POST, { ...BODY, override: { apiKey: KEY, provider: "openai", model } });
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("names the provider, not OpenAI, when a saved key is withheld from a remote plain-http service", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({ detail: "No judge API key for Claude: set ANTHROPIC_API_KEY for the eval service, or save a Claude key in Meridian's Settings." }) });
+    const POST = await load("http://eval.example.com:8008");
+    const { outcome } = await (await post(POST, { ...BODY, override: { apiKey: "sk-ant-api03-JUDGEKEY0000000000", provider: "anthropic", model: "claude-sonnet-5" } })).json();
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toContain("Your saved Claude key was not sent");
+    expect(upstream().headers["X-Judge-Api-Key"]).toBeUndefined(); // a key never travels in plaintext to a remote host
+    expect(upstream().headers["X-Judge-Provider"]).toBe("anthropic"); // the choice is not a secret
+  });
+
+  it("reports the model that actually judged, as the service names it", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ ...OK_RESULT, judge_model: "claude-haiku-4-5-20251001" }) });
+    const POST = await load("http://localhost:8008");
+    const { result } = (await (await post(POST, { ...BODY, override: { apiKey: KEY, provider: "anthropic", model: "claude-haiku-4-5-20251001" } })).json()).outcome;
+    expect(result.judgeModel).toBe("claude-haiku-4-5-20251001");
+  });
+});
+
+describe("POST /api/evaluate: one verdict rule for every judge", () => {
+  const judged = async (score: number, threshold = 0.6, success: boolean | undefined = undefined) => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ ...OK_RESULT, score, threshold, success }) });
+    const POST = await load("http://localhost:8008");
+    return (await (await post(POST, BODY)).json()).outcome.result;
+  };
+
+  it("passes a score shown as 60% against a 60% mark, even when the service's raw float said 0.5999999999999999 and Fail", async () => {
+    const r = await judged(0.5999999999999999, 0.6, false); // an older service, as DeepEval computed it
+    expect(r.score).toBe(0.6);
+    expect(r.success).toBe(true);
+  });
+
+  it("gives both backends the same verdict at the same displayed score", async () => {
+    const a = await judged(0.5999999999999999, 0.6, false);
+    const b = await judged(0.6, 0.6, true);
+    expect([a.score, a.success]).toEqual([b.score, b.success]);
+  });
+
+  it("fails a score shown as 59%, and says 59", async () => {
+    const r = await judged(0.594, 0.6, true);
+    expect(r.score).toBe(0.59);
+    expect(r.success).toBe(false);
+  });
+
+  it("leaves a settled score exactly as it is", async () => {
+    const r = await judged(0.85, 0.6, true);
+    expect([r.score, r.success]).toEqual([0.85, true]);
+  });
+});

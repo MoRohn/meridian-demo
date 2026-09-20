@@ -12,6 +12,9 @@
     "test:watch": "vitest",
     "test:e2e": "node e2e/smoke.mjs",
     "test:e2e:report": "node e2e/report.mjs",
+    "test:e2e:chat": "node e2e/chat.mjs",
+    "test:e2e:citations": "node e2e/citations.mjs",
+    "test:e2e:settings": "node e2e/settings.mjs",
     "check:report": "node e2e/check-report.mjs",
     "eval-service": "node scripts/eval-service.mjs start",
     "eval-service:setup": "node scripts/eval-service.mjs setup"

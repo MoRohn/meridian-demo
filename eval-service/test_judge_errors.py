@@ -68,7 +68,7 @@ def test_a_rate_limited_judge_returns_502_with_a_readable_message_and_code(clien
     assert "judge_rate_limited" in r.json()["detail"] and "Future" not in r.json()["detail"]
 
 
-@pytest.mark.parametrize("bad", [99.0, 9.9, -0.1, 1.0000001, float("nan"), float("inf")])
+@pytest.mark.parametrize("bad", [99.0, 9.9, -0.1, 1.01, -0.01, 1.006, float("nan"), float("inf"), float("-inf")])
 def test_an_out_of_range_score_is_rejected_not_passed(client, bad):
     """Regression: a judge answering 99 produced score=9.9 with success=True."""
     StubGEval.score = bad

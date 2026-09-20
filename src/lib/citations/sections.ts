@@ -1,6 +1,5 @@
 /**
- * Splits a document into its clauses so it can be used as a citation SOURCE: a quote is located inside one section, and
- * that section is what the model judges the claim against. Numbered contracts ("1. Term and Renewal. ...") split on their
+ * Splits a document into its clauses so each can be a citation SOURCE: a check is judged against the one clause it is about. Numbered contracts ("1. Term and Renewal. ...") split on their
  * numbering; anything else (a pasted letter, a PDF that lost its numbering) falls back to paragraphs.
  */
 export interface DocSection {
@@ -54,10 +53,4 @@ export function splitSections(text: string): DocSection[] {
       const { heading, body } = headingAndBody(p, "");
       return { id: `Doc ¶${i + 1}`, number: String(i + 1), heading, text: p, body };
     });
-}
-
-/** The document's sections as citation sources, keyed by the id a check reports. Empty when there is no document. */
-export function documentAuthorities(text: string | null | undefined): Record<string, string> {
-  if (!text?.trim()) return {};
-  return Object.fromEntries(splitSections(text).map((s) => [s.id, s.text]));
 }

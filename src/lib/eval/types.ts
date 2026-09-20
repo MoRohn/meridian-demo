@@ -17,8 +17,8 @@ export interface EvalRequest {
   actualOutput: string;
   /** The source text the answer must be supported by. */
   context?: string;
-  /** A judge API key saved in Settings, forwarded for this one request. Never stored server-side. */
-  override?: { apiKey?: string };
+  /** The judge chosen in Settings, forwarded for this one request: its key, and optionally which company's model and which model. Never stored server-side. */
+  override?: { apiKey?: string; provider?: "openai" | "anthropic" | "gemini"; model?: string };
 }
 
 export interface EvalIntegrity {

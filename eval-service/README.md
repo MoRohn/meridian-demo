@@ -59,12 +59,44 @@ exactly as the app's other routes do, and the judge uses it for that one call:
   tested).
 - It is never stored, never returned, and never logged. Every log record from every logger, including third-party ones
   that echo provider errors, is redacted at the record factory, and error text is redacted before it reaches a reader.
-- Only the *key* is used. The judge keeps its own model (`EVAL_JUDGE_MODEL`), independent of the model picked for chat.
+- By default only the *key* is used: the judge keeps its own model (`EVAL_JUDGE_MODEL`), independent of the model picked for chat.
 
 The status line in the evaluation panel says "Judge ready, using your saved OpenAI key" when this is in effect.
 
+### Choosing a different judge
+
+The **Judge model** section of the same dialog chooses who judges. The default, **Use my OpenAI key**, is everything above.
+The alternatives are **Claude (Anthropic)**, **Gemini (Google)**, and **OpenAI with another model or key**, each with its own
+model list (or any model id) and key field. Claude and Gemini are the recommended choice: a judge tends to favor answers from
+its own company, and OpenAI both writes the chat answers and is one of the two backends being compared.
+
+The choice travels with each request as `X-Judge-Provider` and `X-Judge-Model` headers beside `X-Judge-Api-Key`. The provider
+must be one of `openai`, `anthropic`, `gemini`, and the model a short model-shaped id, or the request is rejected with a 400.
+A key that arrives with a request is used for that call only, for any provider; a provider with no key in the request falls
+back to the service's own (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`), and with neither
+the response is a 503 naming the provider. `GET /health` lists each provider's default model and whether the service holds
+a key for it.
+
+Claude and Gemini return no token probabilities, so G-Eval takes the integer the judge chose as the score. That is exactly what
+`EVAL_TOP_LOGPROBS=1` gives an OpenAI judge, so the score always matches the band the judge picked. Their SDKs are in
+`requirements.txt`; after updating, run `npm run eval-service:setup` once and restart the service.
+
 Limit: command-line runs (`deepeval test run`, `golden/run_golden.py`, `golden/synth.py`) cannot read browser storage, so
 they still need `OPENAI_API_KEY` in the environment or in `eval-service/.env`.
+
+## How pass or fail is decided
+
+One rule, for every judge (OpenAI, Claude, Gemini) and for both backends' answers: **the score is settled to the whole percent
+the reader sees, and it passes when that number reaches the pass mark** (`EVAL_PASS_THRESHOLD`, 60% by default, compared as whole
+percents, so 60% passes a 60% mark and 59% does not).
+
+This exists because DeepEval's raw score is not always exactly the judge's choice. A judge that chooses 6 on the 0-10 scale is
+scored as `(6 * p) / p / 10`, which is `0.5999999999999999` for about 1 probability in 12, and comparing that float to `0.6` made a
+passing 60% show as **Fail** next to another 60% that showed Pass. The same noise can push a chosen 10 to `1.0000000000000002`,
+which used to be rejected as an invalid score. `judge.settle_score` (and its twin `settleVerdict` in `src/lib/eval/verdict.ts`,
+applied again in the app's route so an older service cannot reintroduce it) settles both. A score that is truly outside 0-1, such
+as 9.9 from a judge that answered 99, is still refused. The head-to-head "level within 3 points" check uses the same whole-point
+comparison. The golden-set tests decide pass or fail the same way, not with DeepEval's `assert_test`.
 
 ## How a judgment is built
 

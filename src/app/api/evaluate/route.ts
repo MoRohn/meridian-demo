@@ -4,6 +4,7 @@ import { describeServiceError, parseJudgeFailure } from "@/lib/eval/serviceError
 import { toEvalHealth, type EvalHealth } from "@/lib/eval/health";
 import { evalLogLine } from "@/lib/eval/log";
 import { isPlausibleKey, isSafeKeyTransport, redactKey } from "@/lib/eval/transport";
+import { settleVerdict } from "@/lib/eval/verdict";
 import type { EvalOutcome, EvalRequest, EvalResult } from "@/lib/eval/types";
 
 export const runtime = "nodejs";
@@ -12,6 +13,10 @@ const EVAL_SERVICE_URL = process.env.EVAL_SERVICE_URL || "http://localhost:8008"
 const EVAL_TIMEOUT_MS = 60_000;
 const KINDS: readonly string[] = EVAL_KIND_IDS;
 const BACKENDS: readonly string[] = ["typesafe", "openai"];
+const JUDGE_PROVIDERS = ["openai", "anthropic", "gemini"] as const;
+const PROVIDER_LABELS: Record<(typeof JUDGE_PROVIDERS)[number], string> = { openai: "OpenAI", anthropic: "Claude", gemini: "Gemini" };
+/** A model id is a short name, never free text (mirrors eval-service/main.py): it ends up in a provider's request. */
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
 
 /**
  * Server-side proxy to the DeepEval microservice (see eval-service/main.py)
@@ -46,6 +51,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "kind, backend, input, and actualOutput are required" }, { status: 400 });
   }
 
+  // Who judges, from Settings: a provider, a model, and that provider's key. Provider and model are validated here as the
+  // service validates them, so nothing but a known provider and a model-shaped id is ever forwarded.
+  const provider = body.override?.provider;
+  if (provider !== undefined && !(JUDGE_PROVIDERS as readonly string[]).includes(provider)) {
+    return NextResponse.json({ error: `provider must be one of: ${JUDGE_PROVIDERS.join(", ")}` }, { status: 400 });
+  }
+  const judgeModel = body.override?.model;
+  if (judgeModel !== undefined && (typeof judgeModel !== "string" || !MODEL_ID.test(judgeModel))) {
+    return NextResponse.json({ error: "model is not a valid model id" }, { status: 400 });
+  }
+
   // A key saved in Settings is used for the judge on this request only. It goes to the service in a header (never the
   // body), only over a safe transport, and is never logged or stored here.
   const savedKey = body.override?.apiKey;
@@ -61,7 +77,12 @@ export async function POST(req: NextRequest) {
   try {
     const res = await fetch(`${EVAL_SERVICE_URL}/evaluate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(canSendKey ? { "X-Judge-Api-Key": savedKey } : {}) },
+      headers: {
+        "Content-Type": "application/json",
+        ...(canSendKey ? { "X-Judge-Api-Key": savedKey } : {}),
+        ...(provider ? { "X-Judge-Provider": provider } : {}),
+        ...(judgeModel ? { "X-Judge-Model": judgeModel } : {}),
+      },
       body: JSON.stringify({
         kind: body.kind,
         backend: body.backend,
@@ -78,17 +99,21 @@ export async function POST(req: NextRequest) {
       // 503 is specifically "the service is up but its own judge model isn't
       // configured" that's a not_configured state, not a real failure.
       const reason = res.status === 503 ? "not_configured" : "error";
-      const hint = keyWithheld && res.status === 503 ? " Your saved OpenAI key was not sent because the evaluation service address is neither https nor local; use https, or set OPENAI_API_KEY on the service." : "";
+      const label = PROVIDER_LABELS[provider ?? "openai"];
+      const hint = keyWithheld && res.status === 503 ? ` Your saved ${label} key was not sent because the evaluation service address is neither https nor local; use https, or set the key on the service.` : "";
       const failure = parseJudgeFailure(message + hint);
       const outcome: EvalOutcome = { ok: false, reason, message: failure.message, ...(failure.code ? { code: failure.code } : {}) };
       return respond(outcome);
     }
 
     const data = await res.json();
+    // Pass or fail is decided here on the score as it is shown, the same rule for every judge and both backends, so it does
+    // not depend on the service's raw float (or on an older service that has not been updated). See lib/eval/verdict.ts.
+    const settled = settleVerdict(data.score, data.threshold);
     const result: EvalResult = {
-      score: data.score,
+      score: settled?.score ?? data.score,
       reason: data.reason,
-      success: data.success,
+      success: settled?.success ?? data.success,
       threshold: data.threshold,
       judgeModel: data.judge_model,
       rubric: data.rubric,

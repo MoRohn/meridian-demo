@@ -3,8 +3,6 @@ import { getOrCreateSession, resetSession } from "@/lib/memory/session";
 import { handleTurn } from "@/lib/orchestrator/run";
 import { loadDocument } from "@/lib/orchestrator/state";
 import { findSampleContract } from "@/lib/data/sampleContracts";
-import { verifyCitation } from "@/lib/skills/citationVerifier";
-import { citationSources } from "@/lib/citations/sources";
 import { isLive, type KeyOverride } from "@/lib/typesafe/client";
 import { isOpenAIConfigured } from "@/lib/openai/client";
 
@@ -21,16 +19,7 @@ type Body =
       typesafeOverride?: KeyOverride;
       openaiOverride?: KeyOverride;
     }
-  | { action: "reset"; sessionId: string; typesafeOverride?: KeyOverride; openaiOverride?: KeyOverride }
-  | {
-      action: "verify_citation";
-      sessionId: string;
-      claim: string;
-      quote: string | null;
-      sectionId?: string;
-      typesafeOverride?: KeyOverride;
-      openaiOverride?: KeyOverride;
-    };
+  | { action: "reset"; sessionId: string; typesafeOverride?: KeyOverride; openaiOverride?: KeyOverride };
 
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -85,22 +74,10 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "message is required" }, { status: 400 });
         }
         const session = getOrCreateSession(body.sessionId);
-        const result = await handleTurn(session, body.message.trim(), body.typesafeOverride);
+        const result = await handleTurn(session, body.message.trim(), body.typesafeOverride, body.openaiOverride);
         return NextResponse.json({
           result,
           session: publicSession(session),
-          live: isLive(body.typesafeOverride),
-          openaiConfigured: isOpenAIConfigured(body.openaiOverride),
-        });
-      }
-
-      case "verify_citation": {
-        if (!body.claim || !body.claim.trim()) {
-          return NextResponse.json({ error: "claim is required" }, { status: 400 });
-        }
-        const result = await verifyCitation(citationSources(body.sessionId), body.claim, body.quote, body.sectionId, body.typesafeOverride);
-        return NextResponse.json({
-          result,
           live: isLive(body.typesafeOverride),
           openaiConfigured: isOpenAIConfigured(body.openaiOverride),
         });

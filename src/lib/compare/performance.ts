@@ -118,7 +118,19 @@ export interface Dimension {
 }
 
 /** Differences smaller than this are noise, not an edge: 3 score points, 10% in speed, 5% in cost. */
-const TIE = { score: 0.03, speed: 0.1, cost: 0.05 };
+const TIE = { speed: 0.1, cost: 0.05 };
+/** Judge scores within this many points of each other are level. */
+export const TIE_POINTS = 3;
+
+/**
+ * Head to head on two scores as the reader sees them: whole percents, and the gap between those. Working in whole points
+ * (not by subtracting the raw floats) is what makes "within 3 points" mean 3 points: 0.63 - 0.60 is 0.030000000000000027
+ * as a float, which would otherwise miss a 3-point tie that the text describes as one.
+ */
+export function compareScores(ts: number, oa: number): { delta: number; winner: Edge } {
+  const delta = Math.round(ts * 100) - Math.round(oa * 100);
+  return { delta, winner: Math.abs(delta) <= TIE_POINTS ? "tie" : delta > 0 ? "typesafe" : "openai" };
+}
 
 function edgeLowerIsBetter(ts: number | null, oa: number | null, tolerance: number): Edge {
   if (ts == null || oa == null) return "n/a";
@@ -137,7 +149,7 @@ export function compareBackends(ts: BackendPerformance, oa: BackendPerformance):
   if (tq == null || oq == null) {
     dims.push({ id: "quality", label: "Quality", edge: "n/a", detail: "Needs an evaluation of both models' answers." });
   } else {
-    const edge: Edge = Math.abs(tq - oq) <= TIE.score ? "tie" : tq > oq ? "typesafe" : "openai";
+    const { delta, winner: edge } = compareScores(tq, oq);
     dims.push({
       id: "quality",
       label: "Quality",
@@ -148,7 +160,7 @@ export function compareBackends(ts: BackendPerformance, oa: BackendPerformance):
             ? `${ts.quality.evaluated} evaluation${ts.quality.evaluated === 1 ? "" : "s"} each`
             : `${ts.quality.evaluated} and ${oa.quality.evaluated} evaluations`
         }` +
-        (edge === "tie" ? ", within noise." : `, ${Math.abs(Math.round((tq - oq) * 100))} points apart.`),
+        (edge === "tie" ? ", within noise." : `, ${Math.abs(delta)} points apart.`),
     });
   }
 
@@ -244,8 +256,8 @@ export function matchups(evals: readonly StoredEvaluationRow[]): Matchup[] {
     if (!pair.typesafe || !pair.openai) continue;
     const t = (pair.typesafe.outcome as { ok: true; result: EvalResult }).result;
     const o = (pair.openai.outcome as { ok: true; result: EvalResult }).result;
-    const delta = Math.round((t.score - o.score) * 100);
-    out.push({ scope, kind: pair.typesafe.kind ?? pair.openai.kind, typesafe: t, openai: o, delta, winner: Math.abs(t.score - o.score) <= TIE.score ? "tie" : delta > 0 ? "typesafe" : "openai" });
+    const { delta, winner } = compareScores(t.score, o.score);
+    out.push({ scope, kind: pair.typesafe.kind ?? pair.openai.kind, typesafe: t, openai: o, delta, winner });
   }
   return out;
 }
@@ -254,7 +266,7 @@ export function matchups(evals: readonly StoredEvaluationRow[]): Matchup[] {
 export function describeMatchup(m: Pick<Matchup, "typesafe" | "openai" | "delta" | "winner">): string {
   const t = Math.round(m.typesafe.score * 100);
   const o = Math.round(m.openai.score * 100);
-  if (m.winner === "tie") return `Level: ${t}% and ${o}% are within ${Math.round(TIE.score * 100)} points, which is within judge noise.`;
+  if (m.winner === "tie") return `Level: ${t}% and ${o}% are within ${TIE_POINTS} points, which is within judge noise.`;
   const [lead, trail] = m.winner === "typesafe" ? ["TypeSafe", "OpenAI"] : ["OpenAI", "TypeSafe"];
   const leadPass = (m.winner === "typesafe" ? m.typesafe : m.openai).success;
   const trailPass = (m.winner === "typesafe" ? m.openai : m.typesafe).success;

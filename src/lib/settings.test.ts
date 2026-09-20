@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   autoEvaluateEnabled,
+  DEFAULT_JUDGE_MODEL,
   DEFAULT_OPENAI_MODEL,
   DEFAULT_TYPESAFE_MODEL,
+  describeJudge,
+  emptySettings,
+  JUDGE_MODELS,
+  JUDGE_OPTIONS,
+  judgeOverride,
   loadSettings,
   openaiOverride,
   typesafeOverride,
@@ -16,6 +22,9 @@ describe("typesafeOverride / openaiOverride", () => {
     openaiApiKey: "",
     openaiModel: DEFAULT_OPENAI_MODEL,
     autoEvaluate: true,
+    judgeProvider: "saved",
+    judgeModel: "",
+    judgeApiKey: "",
   };
 
   it("returns undefined when no key is set, regardless of the model field", () => {
@@ -52,7 +61,7 @@ describe("loadSettings (server/SSR context)", () => {
 });
 
 describe("autoEvaluateEnabled", () => {
-  const base: ApiKeySettings = { typesafeApiKey: "", typesafeModel: DEFAULT_TYPESAFE_MODEL, openaiApiKey: "", openaiModel: DEFAULT_OPENAI_MODEL, autoEvaluate: true };
+  const base: ApiKeySettings = { typesafeApiKey: "", typesafeModel: DEFAULT_TYPESAFE_MODEL, openaiApiKey: "", openaiModel: DEFAULT_OPENAI_MODEL, autoEvaluate: true, judgeProvider: "saved", judgeModel: "", judgeApiKey: "" };
 
   it("is on by default", () => {
     expect(autoEvaluateEnabled(base)).toBe(true);
@@ -66,5 +75,65 @@ describe("autoEvaluateEnabled", () => {
   });
   it("is on when there is no browser at all (server render)", () => {
     expect(autoEvaluateEnabled()).toBe(true);
+  });
+});
+
+describe("judgeOverride", () => {
+  const base: ApiKeySettings = { ...emptySettings, openaiApiKey: "sk-openai-saved-000000000000" };
+
+  it("defaults to the saved OpenAI key alone, so a reader who has entered one key is ready with no further setup", () => {
+    expect(emptySettings.judgeProvider).toBe("saved");
+    expect(judgeOverride(base)).toEqual({ provider: "openai", apiKey: "sk-openai-saved-000000000000" });
+  });
+
+  it("has nothing to send when the default is chosen and no OpenAI key is saved", () => {
+    expect(judgeOverride({ ...emptySettings })).toBeUndefined();
+    expect(judgeOverride({ ...emptySettings, openaiApiKey: "   " })).toBeUndefined();
+  });
+
+  it("uses the Claude or Gemini key and model that were chosen, never the OpenAI key", () => {
+    const claude = judgeOverride({ ...base, judgeProvider: "anthropic", judgeModel: "claude-opus-5", judgeApiKey: "  sk-ant-000000000000000  " });
+    expect(claude).toEqual({ provider: "anthropic", model: "claude-opus-5", apiKey: "sk-ant-000000000000000" });
+    const gemini = judgeOverride({ ...base, judgeProvider: "gemini", judgeApiKey: "AIza0000000000000000" });
+    expect(gemini).toEqual({ provider: "gemini", model: DEFAULT_JUDGE_MODEL.gemini, apiKey: "AIza0000000000000000" });
+    expect(JSON.stringify([claude, gemini])).not.toContain("sk-openai-saved");
+  });
+
+  it("asks for the provider's default model when none was picked", () => {
+    expect(judgeOverride({ ...base, judgeProvider: "anthropic", judgeApiKey: "sk-ant-000000000000000" })?.model).toBe(DEFAULT_JUDGE_MODEL.anthropic);
+  });
+
+  it("sends a Claude or Gemini judge with no key anyway, so the service can use its own or say plainly that none exists", () => {
+    expect(judgeOverride({ ...base, judgeProvider: "anthropic" })).toEqual({ provider: "anthropic", model: DEFAULT_JUDGE_MODEL.anthropic });
+  });
+
+  it("lets a different OpenAI judge reuse the OpenAI key above, or take its own", () => {
+    expect(judgeOverride({ ...base, judgeProvider: "openai", judgeModel: "gpt-4o" })).toEqual({ provider: "openai", model: "gpt-4o", apiKey: "sk-openai-saved-000000000000" });
+    expect(judgeOverride({ ...base, judgeProvider: "openai", judgeModel: "gpt-4o", judgeApiKey: "sk-other-0000000000000000" })?.apiKey).toBe("sk-other-0000000000000000");
+  });
+
+  it("copes with settings saved before the judge options existed", () => {
+    const old = { typesafeApiKey: "", typesafeModel: "m", openaiApiKey: "sk-openai-saved-000000000000", openaiModel: "m", autoEvaluate: true } as ApiKeySettings;
+    expect(judgeOverride(old)).toEqual({ provider: "openai", apiKey: "sk-openai-saved-000000000000" });
+    expect(describeJudge(old)).toEqual({ provider: "openai", label: "OpenAI", model: null });
+  });
+});
+
+describe("describeJudge and the judge options", () => {
+  it("names the judge for the status line", () => {
+    expect(describeJudge(emptySettings)).toEqual({ provider: "openai", label: "OpenAI", model: null });
+    expect(describeJudge({ ...emptySettings, judgeProvider: "anthropic", judgeModel: "claude-opus-5" })).toEqual({ provider: "anthropic", label: "Claude", model: "claude-opus-5" });
+    expect(describeJudge({ ...emptySettings, judgeProvider: "gemini" })).toEqual({ provider: "gemini", label: "Gemini", model: DEFAULT_JUDGE_MODEL.gemini });
+  });
+
+  it("lists the saved OpenAI key first as the default, and marks the other companies' models as the recommended ones", () => {
+    expect(JUDGE_OPTIONS[0].id).toBe("saved");
+    expect(JUDGE_OPTIONS.filter((o) => o.independent).map((o) => o.id)).toEqual(["anthropic", "gemini"]);
+  });
+
+  it("offers each provider's default model in its own list", () => {
+    for (const provider of ["openai", "anthropic", "gemini"] as const) {
+      expect(JUDGE_MODELS[provider].map((m) => m.id)).toContain(DEFAULT_JUDGE_MODEL[provider]);
+    }
   });
 });

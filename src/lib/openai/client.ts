@@ -3,10 +3,10 @@ import type { QuestionSpec, State } from "../typesafe/types";
 import type { OpenAIRunOutcome, OpenAIRunResult } from "./types";
 import type { KeyOverride } from "../typesafe/client";
 
-const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-6-astra";
+export const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-6-astra";
 /** Long-established, universally-available model — the safety net when a newer/rolling-out model (like the flagship default above) 404s or 400s for an account that doesn't have it yet, or rejects a request shape it doesn't support. */
-const FALLBACK_MODEL = "gpt-4o-mini";
-const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+export const FALLBACK_MODEL = "gpt-4o-mini";
+export const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
 /**
  * Reasoning-family models (o-series, gpt-5+) default to spending reasoning
@@ -17,12 +17,12 @@ const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
  * turned off for these models rather than left to whatever the API defaults to.
  */
 const REASONING_MODEL_PREFIXES = ["o1", "o3", "o4", "gpt-5", "gpt-6"];
-function isReasoningModel(model: string): boolean {
+export function isReasoningModel(model: string): boolean {
   return REASONING_MODEL_PREFIXES.some((p) => model.startsWith(p));
 }
 
 /** True for the class of errors that mean "this exact model/request shape isn't callable," as opposed to auth/rate-limit/network failures a fallback model wouldn't fix either. */
-function looksLikeModelUnavailable(status: number, body: string): boolean {
+export function looksLikeModelUnavailable(status: number, body: string): boolean {
   if (status !== 400 && status !== 404) return false;
   return /model|reasoning_effort|function tool/i.test(body);
 }

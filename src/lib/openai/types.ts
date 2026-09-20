@@ -34,6 +34,8 @@ export interface OpenAITurn {
   risk: import("../skills/clauseRisk").CompositeRisk | null;
   complianceFlags: import("../orchestrator/compose").ComplianceFlag[];
   blocked: "privileged" | "injection" | null;
+  /** Where `reply` came from, as for TypeSafe's turn. */
+  answer?: import("../chat/answer").TurnAnswer;
 }
 
 export type OpenAIRunOutcome =

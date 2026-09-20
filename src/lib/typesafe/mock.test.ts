@@ -118,3 +118,84 @@ describe("mockSystemOne", () => {
     expect(a.answers).toEqual(b.answers);
   });
 });
+
+describe("the demo intent classifier", () => {
+  const intent = (message: string) => {
+    const questions: Record<string, QuestionSpec> = {
+      intent: {
+        type: "choice",
+        instructions: "What is the user asking the assistant to do in `latest_message`?",
+        criteria: { analyze_contract: "review", check_compliance: "flags", verify_citation: "cite", summarize_context: "recap", ask_legal_question: "open question", small_talk: "chit-chat" },
+      },
+    };
+    const a = mockSystemOne({ latest_message: message, active_document: { text: "contract text" } }, questions, "jev-latest").answers.intent;
+    return a.type === "choice" ? a : null;
+  };
+
+  it("routes a task word to that task", () => {
+    expect(intent("Analyze this contract")?.choice).toBe("analyze_contract");
+    expect(intent("What is the risk here?")?.choice).toBe("analyze_contract");
+    expect(intent("Check compliance")?.choice).toBe("check_compliance");
+    expect(intent("Verify a citation")?.choice).toBe("verify_citation");
+    expect(intent("Summarize this context")?.choice).toBe("summarize_context");
+    expect(intent("give me a recap")?.choice).toBe("summarize_context");
+  });
+
+  it("routes a plain question about the contract to open Q&A, not to analysis", () => {
+    expect(intent("Can I terminate early?")?.choice).toBe("ask_legal_question");
+    expect(intent("What are the payment terms?")?.choice).toBe("ask_legal_question");
+    expect(intent("Can you explain how indemnification works in general?")?.choice).toBe("ask_legal_question");
+    expect(intent("who is liable for indirect damages")?.choice).toBe("ask_legal_question");
+  });
+
+  it("routes a greeting to small talk", () => {
+    expect(intent("hello there")?.choice).toBe("small_talk");
+    expect(intent("thanks!")?.choice).toBe("small_talk");
+  });
+
+  it("is confident enough to act on, and leaves the rest to the generic scorer", () => {
+    const a = intent("Can I terminate early?")!;
+    expect(a.confidence).toBeGreaterThan(0.35);
+    expect(a.probabilities.ask_legal_question).toBeCloseTo(0.82, 2);
+    // No rule matches "hmm": the generic scorer answers, with its usual spread.
+    expect(intent("hmm")?.probabilities.ask_legal_question).not.toBeCloseTo(0.82, 2);
+  });
+});
+
+describe("the demo evaluator's reading of a citation check", () => {
+  const relation = (claim: string, source: string) => {
+    const questions: Record<string, QuestionSpec> = {
+      relation_x: { type: "choice", instructions: "How does `checks.x.source_section` relate to `checks.x.claim`?", criteria: { supports: "s", contradicts: "c", says_nothing: "n" } },
+    };
+    const a = mockSystemOne({ checks: { x: { claim, source_section: source } } }, questions, "jev-latest").answers.relation_x;
+    return a.type === "choice" ? a : null;
+  };
+
+  it("reads each check's own claim and source by the path its question names", () => {
+    expect(relation("Renewal is annual.", "Renewal is annual and automatic.")?.choice).toBe("supports");
+  });
+  it("sees that an uncapped clause contradicts a claim that liability is capped, and a capped one does not", () => {
+    const claim = "Each party's liability is capped at a stated amount.";
+    expect(relation(claim, "Provider's total liability shall not be limited except as required by law.")?.choice).toBe("contradicts");
+    expect(relation(claim, "Neither party's aggregate liability shall exceed fifty thousand dollars ($50,000); liability is capped at that amount.")?.choice).toBe("supports");
+  });
+  it("sees that a termination fee and a long notice period break 'no more than 90 days and no fee'", () => {
+    const claim = "Either party may terminate for convenience on no more than ninety (90) days' notice and without a termination fee.";
+    expect(relation(claim, "Customer may terminate for convenience only upon eighteen (18) months' notice and payment of an early termination fee.")?.choice).toBe("contradicts");
+    expect(relation(claim, "Either party may terminate this Agreement for convenience upon thirty (30) days' written notice.")?.choice).toBe("supports");
+    expect(relation(claim, "The Company may terminate at any time.")?.choice).toBe("says_nothing");
+  });
+  it("sees that a one-way indemnity is not mutual, and that a term of a year is not a 30-day notice window", () => {
+    expect(relation("Indemnification is mutual and limited to each party's own breaches.", "Customer shall indemnify Provider from any and all claims, without regard to fault.")?.choice).toBe("contradicts");
+    expect(relation("Auto-renewal gives at least thirty (30) days' written notice to decline.", "This Agreement renews for successive one (1) year terms unless a party gives notice.")?.choice).toBe("says_nothing");
+  });
+  it("says a clause silent on security and breach notice does not meet a data protection claim, and is confident about a contradiction", () => {
+    expect(relation("Personal data is covered by a data protection clause that addresses permitted use, security and breach notification.", "Provider may process Customer Data as necessary to provide the Services.")?.choice).toBe("says_nothing");
+    expect(relation("Liability is capped at a stated amount.", "Liability is unlimited.")?.confidence).toBeGreaterThanOrEqual(0.75);
+  });
+  it("still uses the original claim/source paths for the older single-check question", () => {
+    const questions: Record<string, QuestionSpec> = { relation: { type: "choice", instructions: "How does `source_section` relate to `claim`?", criteria: { supports: "s", contradicts: "c", says_nothing: "n" } } };
+    const a = mockSystemOne({ claim: "Renewal is annual.", source_section: "Renewal is annual and automatic." }, questions, "jev-latest").answers.relation;
+    expect(a.type === "choice" && a.choice).toBe("supports");
+  });
+});
