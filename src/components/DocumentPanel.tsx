@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { SAMPLE_CONTRACTS } from "@/lib/data/sampleContracts";
+import { differs, layoutFor, measureSheet, type SheetMetrics } from "@/lib/document/measure";
+import { pageAt, paginate } from "@/lib/document/paginate";
 import { Icon, type IconName } from "./Icon";
 
 const DOC_ICONS: Record<string, IconName> = {
@@ -24,32 +26,8 @@ function hasAcceptedExtension(name: string): boolean {
   return ACCEPTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
-/**
- * Splits into page-sized chunks so the document reads as an actual paginated
- * document rather than one long scroll — breaking on a blank line near the
- * budget so a page never cuts a paragraph in half. This is a real, honest
- * design choice over rendering an actual PDF canvas: a canvas+text-layer PDF
- * renderer (pdfjs-dist, already a transitive dependency via pdf-parse) would
- * need its own worker setup, which is exactly what broke pdf-parse v2 under
- * Turbopack — and even working, a canvas's text layer is far more fragile to
- * select from than plain HTML. Paginated HTML gets the paper-page look with
- * zero risk to the selection-driven features this panel is built around.
- */
-const CHARS_PER_PAGE = 2600;
-
-function paginate(text: string): string[] {
-  const pages: string[] = [];
-  let rest = text;
-  while (rest.length > CHARS_PER_PAGE) {
-    let breakAt = rest.lastIndexOf("\n\n", CHARS_PER_PAGE);
-    if (breakAt < CHARS_PER_PAGE * 0.4) breakAt = rest.lastIndexOf("\n", CHARS_PER_PAGE);
-    if (breakAt < CHARS_PER_PAGE * 0.4) breakAt = CHARS_PER_PAGE;
-    pages.push(rest.slice(0, breakAt).trimEnd());
-    rest = rest.slice(breakAt).trimStart();
-  }
-  pages.push(rest);
-  return pages;
-}
+/** How long scroll events must stop for before the page indicator trusts the scroll position again after a jump. */
+const SETTLE_MS = 120;
 
 /**
  * The Document panel only captures selections and reports them upward — it
@@ -93,6 +71,14 @@ export function DocumentPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
+  /** Where the reader is, as an offset into the text, so their place survives the pages being re-flowed at another zoom. */
+  const anchorRef = useRef(0);
+  /** Set while a Prev/Next jump is scrolling, so the indicator does not flicker through the pages in between. */
+  const settleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const frameRef = useRef<number | null>(null);
+  /** The current render's `syncPage`. Timers and animation frames call it through here: one from an earlier render would pair today's sheets with yesterday's pages. */
+  const syncRef = useRef<() => void>(() => {});
+  const [metrics, setMetrics] = useState<SheetMetrics | null>(null);
 
   // Resetting state when a prop changes, done during render (React's own
   // recommended pattern for this) rather than in an effect: a newly loaded
@@ -113,12 +99,6 @@ export function DocumentPanel({
     setPrevExpanded(expanded);
     setZoom(expanded ? READING_ZOOM : PREVIEW_ZOOM);
   }
-
-  // Refs are an imperative concern, not render output — clearing stale page
-  // element references belongs in an effect, unlike the state resets above.
-  useEffect(() => {
-    pageRefs.current = [];
-  }, [document?.id]);
 
   function handleFilePicked(file: File | undefined) {
     if (!file || !hasAcceptedExtension(file.name)) return;
@@ -172,29 +152,110 @@ export function DocumentPanel({
     };
   }, []);
 
-  const pages = useMemo(() => (document ? paginate(document.text) : []), [document]);
+  // Pages are fitted to the sheet at the current zoom: the sheet is measured, and the text is laid out to fill it (see
+  // lib/document/paginate.ts). Zooming or resizing the panel re-flows them, as a document viewer does.
+  const { cols, rows } = layoutFor(metrics, zoom);
+  const text = document?.text;
+  const pages = useMemo(() => (text == null ? [] : paginate(text, { cols, rows })), [text, cols, rows]);
 
-  // Keeps the page indicator honest during free scrolling, not just when the
-  // reader clicks Prev/Next — whichever page is most visible wins.
-  useEffect(() => {
+  useLayoutEffect(() => {
+    pageRefs.current.length = pages.length;
+    const measure = () => {
+      const sheet = pageRefs.current[0];
+      const block = sheet?.querySelector("pre");
+      if (!sheet || !block) return;
+      const next = measureSheet(sheet, block as HTMLElement);
+      if (next) setMetrics((prev) => (differs(prev, next) ? next : prev));
+    };
+    measure();
     const root = scrollRef.current;
-    if (!root || pages.length <= 1) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        if (visible.length === 0) return;
-        const index = pageRefs.current.findIndex((el) => el === visible[0].target);
-        if (index !== -1) setCurrentPage(index);
-      },
-      { root, threshold: [0.25, 0.5, 0.75] }
-    );
-    pageRefs.current.forEach((el) => el && observer.observe(el));
+    if (!root || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    void window.document.fonts?.ready.then(measure);
     return () => observer.disconnect();
-  }, [pages.length]);
+  }, [pages.length, zoom, document?.id]);
+
+  function scrollToPage(index: number, behavior: ScrollBehavior) {
+    const root = scrollRef.current;
+    const sheet = pageRefs.current[index];
+    if (!root || !sheet) return;
+    // Land with the page's top edge where the first page's sits at rest, just inside the panel's padding.
+    const top = sheet.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop - parseFloat(getComputedStyle(root).paddingTop);
+    root.scrollTo({ top: Math.max(0, top), behavior });
+  }
+
+  // A newly loaded document starts at its first page, whatever the last one's scroll position was.
+  useLayoutEffect(() => {
+    anchorRef.current = 0;
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [document?.id]);
+
+  // After a re-flow, stay on the same passage: the page that now holds the offset the reader was at.
+  useLayoutEffect(() => {
+    if (pages.length === 0) return;
+    const index = pageAt(pages, anchorRef.current);
+    setCurrentPage(index);
+    // The jump below fires scroll events of its own; the indicator waits for them to stop instead of chasing them.
+    holdIndicator(SETTLE_MS);
+    scrollToPage(index, "auto");
+  }, [pages]);
+
+  // The indicator follows the scroll position: the page under a line a third of the way down the viewport, or the last page
+  // once the reader has scrolled to the end (a short last page could never reach that line).
+  function syncPage() {
+    const root = scrollRef.current;
+    if (!root || pages.length === 0) return;
+    let index = 0;
+    if (root.scrollTop > 0 && root.scrollTop + root.clientHeight >= root.scrollHeight - 2) {
+      index = pages.length - 1;
+    } else {
+      const line = root.getBoundingClientRect().top + root.clientHeight * 0.3;
+      pageRefs.current.forEach((sheet, i) => {
+        if (sheet && sheet.getBoundingClientRect().top <= line) index = i;
+      });
+    }
+    anchorRef.current = pages[index]?.start ?? 0;
+    setCurrentPage(index);
+  }
+  useLayoutEffect(() => {
+    syncRef.current = syncPage;
+  });
+
+  function holdIndicator(ms: number) {
+    if (settleRef.current) clearTimeout(settleRef.current);
+    settleRef.current = setTimeout(() => {
+      settleRef.current = null;
+      syncRef.current();
+    }, ms);
+  }
+
+  function handleScroll() {
+    if (settleRef.current) {
+      holdIndicator(SETTLE_MS);
+      return;
+    }
+    if (frameRef.current != null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      syncRef.current();
+    });
+  }
+
+  useEffect(
+    () => () => {
+      if (settleRef.current) clearTimeout(settleRef.current);
+      if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
+    },
+    []
+  );
 
   function goToPage(index: number) {
     const clamped = Math.max(0, Math.min(pages.length - 1, index));
-    pageRefs.current[clamped]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    anchorRef.current = pages[clamped]?.start ?? 0;
+    setCurrentPage(clamped);
+    holdIndicator(250);
+    scrollToPage(clamped, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
   }
 
   return (
@@ -275,7 +336,7 @@ export function DocumentPanel({
             <p className="min-w-0 max-w-full truncate text-base font-bold text-foreground">{document.name}</p>
             <div className="flex shrink-0 items-center gap-1">
               {pages.length > 1 && (
-                <div className="mr-1 flex items-center gap-1 rounded-full border border-border-strong bg-elevated px-1 py-0.5">
+                <div role="group" aria-label="Page navigation" className="mr-1 flex items-center gap-1 rounded-full border border-border-strong bg-elevated px-1 py-0.5">
                   <PageNavButton onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 0} label="Previous page">
                     ‹
                   </PageNavButton>
@@ -323,14 +384,16 @@ export function DocumentPanel({
           )}
 
           <div className="relative flex-1 overflow-hidden">
-            <div ref={scrollRef} tabIndex={0} role="region" aria-label="Document preview" className="h-full overflow-auto bg-elevated/60 p-3 sm:p-6" onMouseUp={handleTextMouseUp}>
+            <div ref={scrollRef} tabIndex={0} role="region" aria-label="Document preview" className="h-full overflow-auto bg-elevated/60 p-3 [scrollbar-gutter:stable] sm:p-6" onMouseUp={handleTextMouseUp} onScroll={handleScroll}>
               <div className="mx-auto flex max-w-[52rem] flex-col items-center gap-6">
-                {pages.map((pageText, i) => (
+                {pages.map((page, i) => (
                   <div
                     key={i}
                     ref={(el) => {
                       pageRefs.current[i] = el;
                     }}
+                    role="group"
+                    aria-label={pages.length > 1 ? `Page ${i + 1} of ${pages.length}` : "Document text"}
                     className="w-full rounded-sm bg-paper px-5 py-6 shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.12)] sm:px-14 sm:py-14"
                     style={{ aspectRatio: pages.length > 1 ? "8.5 / 11" : undefined, minHeight: pages.length > 1 ? undefined : "auto" }}
                   >
@@ -338,7 +401,7 @@ export function DocumentPanel({
                       className="whitespace-pre-wrap break-words font-[var(--font-document)] leading-relaxed text-paper-ink select-text"
                       style={{ fontSize: `${zoom}px` }}
                     >
-                      {pageText}
+                      {page.text}
                     </pre>
                     {pages.length > 1 && (
                       <p className="mt-6 text-center text-xs text-paper-muted">

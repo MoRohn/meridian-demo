@@ -712,7 +712,7 @@ export default function Home() {
                     documentName={activeDocument?.name}
                     documentText={activeDocument?.text}
                     selectedExcerpt={selectedExcerpt}
-                    openaiConfigured={openaiConfigured}
+                    openaiConfigured={effectiveOpenaiConfigured}
                     typesafeOverride={tsOverride}
                     openaiOverride={oaOverride}
                     onBeginTypesafeActivity={beginTypesafeActivity}

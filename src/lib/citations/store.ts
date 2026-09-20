@@ -25,6 +25,11 @@ export interface CitationRun {
   extraction: Extraction;
   typesafe: SideRun;
   openai: SideRun;
+  /**
+   * Which request each side's answer belongs to. A side re-run (Re-check, or a Retry of just one model) gets a new number,
+   * and a slow answer to an earlier request that lands afterwards carries the old one and is ignored.
+   */
+  tokens: { typesafe: number; openai: number };
 }
 
 export const emptySide = (status: SideStatus = "idle"): SideRun => ({ status, judged: {} });

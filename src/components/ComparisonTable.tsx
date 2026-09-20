@@ -59,16 +59,16 @@ export function ComparisonTable({
       <table aria-label={label} className={`w-full table-fixed border-collapse text-xs ${dimmed ? "opacity-75" : ""}`}>
         <colgroup>
           <col />
-          <col className="w-[29%]" />
-          <col className="w-[22%]" />
-          <col className="w-[4.5rem] min-[480px]:w-[5.5rem]" />
+          <col className="w-[31%] min-[480px]:w-[29%]" />
+          <col className="w-[29%] min-[480px]:w-[22%]" />
+          <col className="w-10 min-[480px]:w-[5.5rem]" />
         </colgroup>
         <thead>
           <tr className="border-b border-border bg-elevated text-left text-[11px] font-bold uppercase tracking-wide text-muted">
             <th scope="col" className="px-2.5 py-1.5">{firstColumn}</th>
             <th scope="col" className="px-2 py-1.5">TypeSafe</th>
             <th scope="col" className="px-2 py-1.5">OpenAI</th>
-            <th scope="col" className="px-2 py-1.5">Match</th>
+            <th scope="col" className="px-1 py-1.5 min-[480px]:px-2"><span className="max-[479px]:sr-only">Match</span></th>
           </tr>
         </thead>
         {groups.map((group) => (

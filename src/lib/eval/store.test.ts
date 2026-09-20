@@ -66,3 +66,23 @@ describe("evalStore.rows", () => {
     expect(rows).toHaveLength(2);
   });
 });
+
+describe("evalStore.forget", () => {
+  it("forgets a surface's results and that it was auto-evaluated, so it is judged afresh the next time it is shown", () => {
+    evalStore.set("citation:a", "typesafe", entry({ pending: false }));
+    evalStore.set("citation:a", "openai", entry({ pending: false }));
+    evalStore.markAutoRan("citation:a");
+    evalStore.set("risk", "typesafe", entry());
+    evalStore.forget("citation:a");
+    expect(evalStore.hasAny("citation:a")).toBe(false);
+    expect(evalStore.autoRanFor("citation:a")).toBe(false);
+    expect(evalStore.hasAny("risk")).toBe(true); // nothing else is touched
+  });
+  it("tells subscribers, so an open panel shows the change", () => {
+    const seen = vi.fn();
+    const off = evalStore.subscribe(seen);
+    evalStore.forget("anything");
+    expect(seen).toHaveBeenCalled();
+    off();
+  });
+});

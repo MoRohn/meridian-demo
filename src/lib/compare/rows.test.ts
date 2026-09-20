@@ -6,7 +6,7 @@ import { extractChecks } from "../citations/extract";
 import { emptySide, type CitationRun } from "../citations/store";
 import type { Judged } from "../citations/batch";
 import type { CompositeRisk } from "../skills/clauseRisk";
-import { citationGroups, citationRow, mostConsequential, summarizeCitations, complianceGroups, computeOpenAIRisk, dimensionTone, drivingFactor, openaiRatings, overallTone, riskGroups, type Cell, type CellData } from "./rows";
+import { citationGroups, citationRow, filterExtraction, modelsDisagree, mostConsequential, needsAttention, summarizeCitations, complianceGroups, computeOpenAIRisk, dimensionTone, drivingFactor, openaiRatings, overallTone, riskGroups, type Cell, type CellData } from "./rows";
 
 const ok = (answers: Record<string, { value: string | number | boolean; selfReportedConfidence: number | null }>): OpenAIRunOutcome => ({
   ok: true, result: { model: "gpt-4o", answers, usage: { input_tokens: 2100, output_tokens: 610 }, elapsedMs: 6400, source: "live", requestBytes: 1 },
@@ -114,7 +114,7 @@ describe("citation rows", () => {
     relation, verdict: relation === "supports" ? "verified" : relation === "contradicts" ? "contradicted" : "unsupported", confidence, basis,
   });
   const runOf = (extraction: typeof saas, ts: Record<string, Judged>, oa: Record<string, Judged>, statuses: { ts?: "done" | "pending" | "error"; oa?: "done" | "pending" | "error" | "skipped" } = {}): CitationRun => ({
-    sig: "s", extraction, typesafe: { ...emptySide(statuses.ts ?? "done"), judged: ts }, openai: { ...emptySide(statuses.oa ?? "done"), judged: oa },
+    sig: "s", extraction, tokens: { typesafe: 1, openai: 1 }, typesafe: { ...emptySide(statuses.ts ?? "done"), judged: ts }, openai: { ...emptySide(statuses.oa ?? "done"), judged: oa },
   });
   const row = (extraction: typeof saas, id: string, run?: CitationRun, configured = true) => citationRow(extraction.checks.find((c) => c.id === id)!, run, configured);
 
@@ -191,7 +191,7 @@ describe("summarizeCitations and mostConsequential", () => {
   const saas = extractChecks({ text: SAMPLE_CONTRACTS[0].text, scope: "document" });
   const j = (relation: "supports" | "contradicts" | "says_nothing"): Judged => ({ relation, verdict: relation === "supports" ? "verified" : relation === "contradicts" ? "contradicted" : "unsupported", confidence: 0.8, basis: "calibrated" });
   const run: CitationRun = {
-    sig: "s", extraction: saas,
+    sig: "s", extraction: saas, tokens: { typesafe: 1, openai: 1 },
     typesafe: { ...emptySide("done"), judged: { term_auto_renewal: j("says_nothing"), term_indemnification: j("contradicts"), term_liability: j("contradicts"), term_data_protection: j("says_nothing"), term_termination: j("contradicts"), term_payment: j("supports") } },
     openai: { ...emptySide("done"), judged: { term_auto_renewal: j("says_nothing"), term_indemnification: j("supports"), term_liability: j("contradicts") } },
   };
@@ -207,5 +207,36 @@ describe("summarizeCitations and mostConsequential", () => {
     expect(mostConsequential(saas, { ...run, typesafe: { ...run.typesafe, judged: { term_data_protection: j("says_nothing"), term_payment: j("supports") } } })).toBe("term_data_protection");
     expect(mostConsequential(saas, { ...run, typesafe: { ...run.typesafe, judged: { term_payment: j("supports") } } })).toBe("term_payment");
     expect(mostConsequential(saas, undefined)).toBeNull();
+  });
+});
+
+describe("filtering to what matters", () => {
+  const saas = extractChecks({ text: SAMPLE_CONTRACTS[0].text, scope: "document" });
+  const j = (relation: "supports" | "contradicts" | "says_nothing"): Judged => ({ relation, verdict: relation === "supports" ? "verified" : relation === "contradicts" ? "contradicted" : "unsupported", confidence: 0.8, basis: "calibrated" });
+  const run: CitationRun = {
+    sig: "s", extraction: saas, tokens: { typesafe: 1, openai: 1 },
+    typesafe: { ...emptySide("done"), judged: { term_auto_renewal: j("says_nothing"), term_indemnification: j("contradicts"), term_liability: j("contradicts"), term_data_protection: j("says_nothing"), term_termination: j("contradicts"), term_payment: j("supports") } },
+    openai: { ...emptySide("done"), judged: { term_auto_renewal: j("says_nothing"), term_indemnification: j("supports"), term_liability: j("contradicts"), term_payment: j("supports") } },
+  };
+  const ids = (f: "all" | "attention" | "disagree") => filterExtraction(saas, run, f).checks.map((c) => c.id.replace("term_", ""));
+
+  it("shows everything by default", () => {
+    expect(filterExtraction(saas, run, "all")).toBe(saas);
+  });
+  it("shows contradictions, silent sources and rule-found gaps as needing attention, and not a supported claim", () => {
+    expect(ids("attention")).toEqual(["indemnification", "liability", "data_protection", "termination", "governing_law", "auto_renewal"].sort((a, b) => ids("all").indexOf(a) - ids("all").indexOf(b)));
+    expect(needsAttention(saas.checks.find((c) => c.id === "term_payment")!, run)).toBe(false);
+  });
+  it("does not call a check that is still waiting for its answer a finding", () => {
+    expect(needsAttention(saas.checks.find((c) => c.id === "term_liability")!, undefined)).toBe(false);
+  });
+  it("finds only the checks both models answered differently", () => {
+    expect(ids("disagree")).toEqual(["indemnification"]);
+    expect(modelsDisagree(saas.checks.find((c) => c.id === "term_liability")!, run)).toBe(false);
+    expect(modelsDisagree(saas.checks.find((c) => c.id === "term_termination")!, run)).toBe(false); // OpenAI did not answer it
+  });
+  it("counts only what is shown in each group's note", () => {
+    const [group] = citationGroups(filterExtraction(saas, run, "disagree"), run, true);
+    expect(group.rows).toHaveLength(1);
   });
 });

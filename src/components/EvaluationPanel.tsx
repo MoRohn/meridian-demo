@@ -157,15 +157,16 @@ function CompactSides({ sides, stored, sigOf, serviceDown }: { sides: Side[]; st
   const results = views.filter((v): v is { side: Side; view: Extract<SideView, { kind: "result" }> } => v.view.kind === "result");
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto rounded-lg border border-border bg-surface">
+      {/* Focusable, so a table wider than the screen can still be scrolled by keyboard; on a phone the two figures that matter least are dropped so it normally fits. */}
+      <div role="region" aria-label="Evaluation scores, scrollable" tabIndex={0} className="overflow-x-auto rounded-lg border border-border bg-surface outline-none focus-visible:ring-2 focus-visible:ring-deep/50">
         <table aria-label="Evaluation scores" className="w-full border-collapse text-xs">
           <thead>
             <tr className="border-b border-border bg-elevated text-left text-[11px] font-bold uppercase tracking-wide text-muted">
               <th scope="col" className="px-2.5 py-1.5">Model</th>
               <th scope="col" className="px-2 py-1.5">Score</th>
               <th scope="col" className="px-2 py-1.5">Result</th>
-              <th scope="col" className="px-2 py-1.5">Judge time</th>
-              <th scope="col" className="px-2 py-1.5">Judge cost</th>
+              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Judge time</th>
+              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Judge cost</th>
             </tr>
           </thead>
           {views.map(({ side, view }) => (
@@ -246,8 +247,8 @@ function CompactResultRows({ name, result }: { name: string; result: EvalResult 
           </span>
           <span className="mt-0.5 block text-[11px] text-muted">at {Math.round(result.threshold * 100)}%</span>
         </td>
-        <td className="px-2 pt-2 tabular-nums text-secondary">{formatElapsed(result.latencyMs)}</td>
-        <td className="px-2 pt-2 tabular-nums text-secondary">{result.judgeCostUsd != null ? fmtUsd(result.judgeCostUsd) : "n/a"}</td>
+        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{formatElapsed(result.latencyMs)}</td>
+        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{result.judgeCostUsd != null ? fmtUsd(result.judgeCostUsd) : "n/a"}</td>
       </tr>
       <tr>
         <td colSpan={5} className="px-2.5 pb-2 pt-1 leading-relaxed text-secondary">

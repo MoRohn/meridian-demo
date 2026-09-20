@@ -61,6 +61,12 @@ export const evalStore = {
       return { ...entry, scope: k.slice(0, at), backend: k.slice(at + 1) as Backend };
     });
   },
+  /** Forgets a surface completely, its results and the fact that it was auto-evaluated, so it is judged afresh the next time it is shown. */
+  forget(scope: string) {
+    (["typesafe", "openai"] as const).forEach((b) => entries.delete(key(scope, b)));
+    autoRan.delete(scope);
+    emit();
+  },
   clearScope(scope: string) {
     (["typesafe", "openai"] as const).forEach((b) => entries.delete(key(scope, b)));
     emit();

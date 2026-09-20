@@ -108,7 +108,8 @@ view with axe. When editing a palette, run those two first.
    mutual NDA, and an employment agreement missing a governing-law clause. They're written
    to produce visibly different risk profiles. The document renders as a paginated,
    zoomed-out preview right there in the left panel — click **Expand** for a full reading
-   view, or zoom in directly.
+   view, or zoom in directly. Long documents are divided into equal sheets fitted to the panel and the zoom
+   (paragraphs kept whole, headings kept with what follows), and ‹ › or scrolling moves between them.
 2. **Or upload your own** — drag a `.pdf`, `.docx`, or `.txt` file anywhere onto the left
    panel, or use the "Upload a file" chip. Text is extracted server-side (`mammoth` for
    DOCX, `pdf-parse` for PDF) and dropped into the same session state a sample contract
@@ -400,6 +401,10 @@ characters, page layout and the menu's accessibility. Files and screenshots are 
 request per backend, results survive a tab switch, a highlighted passage is read on its own, references and attachments are
 found and classified, a text with nothing to check makes no model call, and the tab works on a phone and passes the accessibility scan.
 It needs no API keys.
+`npm run test:e2e:pages` checks the Document panel's pages with a long upload: it is divided into equal sheets that each hold their
+text with nothing lost, Previous/Next and the page indicator agree with where the reader is (including when they scroll by hand),
+zooming or resizing re-flows the pages and keeps the reader at the same passage, and a newly loaded document starts on page 1, on
+desktop and a phone. It needs no API keys.
 `npm run check:report -- <file>` validates a report you downloaded from your own session (.html, .pdf, .docx or .md): it is complete, the
 table agrees with the scoring sections, pass/fail agrees with the threshold and the band agrees with the score. It needs no keys and no
 running app, so a report produced by the real judge, with the keys saved in the Settings modal, can be checked directly.

@@ -272,3 +272,27 @@ export function mostConsequential(extraction: Extraction, run: CitationRun | und
   }
   return null;
 }
+
+export type CitationFilter = "all" | "attention" | "disagree";
+
+/** Whether a check is a finding a reader should look at: a contradiction, a source that is silent, a broken reference, a missing term. */
+export function needsAttention(check: Check, run: CitationRun | undefined): boolean {
+  if (check.resolution === "broken" || check.resolution === "missing") return true;
+  if (check.resolution !== "model") return false;
+  const verdict = run?.typesafe.judged[check.id]?.verdict;
+  return verdict === "contradicted" || verdict === "unsupported";
+}
+
+/** Whether both models answered a check and gave different verdicts. */
+export function modelsDisagree(check: Check, run: CitationRun | undefined): boolean {
+  const ts = run?.typesafe.judged[check.id];
+  const oa = run?.openai.judged[check.id];
+  return Boolean(ts && oa && ts.verdict !== oa.verdict);
+}
+
+/** The extraction narrowed to what a filter shows, with its group notes counting only what is shown. */
+export function filterExtraction(extraction: Extraction, run: CitationRun | undefined, filter: CitationFilter): Extraction {
+  if (filter === "all") return extraction;
+  const keep = filter === "attention" ? needsAttention : modelsDisagree;
+  return { ...extraction, checks: extraction.checks.filter((c) => keep(c, run)) };
+}

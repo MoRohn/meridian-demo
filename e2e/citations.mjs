@@ -29,28 +29,55 @@ const check = (ok, label, detail = "") => {
 const browser = await chromium.launch(process.env.E2E_CHROME_PATH ? { executablePath: process.env.E2E_CHROME_PATH, headless: true } : { channel: "chrome", headless: true });
 
 /** A page with OpenAI "configured" and its batch answered by a simulation; every /api/citations POST is counted. */
-async function open(viewport = { width: 1440, height: 900 }) {
+async function open(viewport = { width: 1440, height: 900 }, opts = {}) {
   const ctx = await browser.newContext({ viewport, hasTouch: viewport.width < 800 });
   const page = await ctx.newPage();
+  const ctl = { failOpenai: false, openaiConfigured: opts.openaiConfigured ?? true };
   const calls = [];
+  const judged = [];
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 160)));
-  page.on("request", (r) => r.method() === "POST" && r.url().endsWith("/api/citations") && calls.push(r.postDataJSON()));
+  page.on("request", (r) => {
+    if (r.method() !== "POST") return;
+    if (r.url().endsWith("/api/citations")) calls.push(r.postDataJSON());
+    if (r.url().endsWith("/api/evaluate")) judged.push(r.postDataJSON().backend);
+  });
   await page.route("**/api/chat", async (route) => {
-    const res = await route.fetch();
-    const data = await res.json();
-    data.openaiConfigured = true;
-    return route.fulfill({ response: res, json: data });
+    // A test can close its page while a request is in flight; that is the end of the request, not a failure.
+    try {
+      const res = await route.fetch();
+      const data = await res.json();
+      data.openaiConfigured = ctl.openaiConfigured;
+      await route.fulfill({ response: res, json: data });
+    } catch {
+      /* the page was closed */
+    }
+  });
+  await page.route("**/api/validate-keys", (route) => route.fulfill({ json: { typesafeValid: false, openaiValid: true } }));
+  // The independent judge is simulated too, so a re-check can be seen to re-run it.
+  await page.route("**/api/evaluate", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { health: { status: "ready", judgeModel: "gpt-4o-mini", threshold: 0.6, rubrics: {} } } });
+    return route.fulfill({ json: { outcome: { ok: true, result: { score: 0.8, reason: "Scored.", success: true, threshold: 0.6, judgeModel: "gpt-4o-mini", rubric: { id: "citation", version: "1", title: "c" }, steps: ["a"], bands: [{ low: 0, high: 10, outcome: "x" }], integrity: { status: "clean", signals: [], hiddenCharsRemoved: 0 }, latencyMs: 100, judgeCostUsd: 0.0001 } } } });
   });
   await page.route("**/api/citations", async (route) => {
     const body = route.request().postDataJSON();
-    if (body.backend === "typesafe") return route.fallback();
-    const judged = Object.fromEntries(body.checks.map((c) => [c.id, { relation: "contradicts", verdict: "contradicted", confidence: 0.9, basis: "self-reported" }]));
-    return route.fulfill({ json: { ok: true, judged, model: "gpt-5", source: "live", elapsedMs: 3100, usage: { input_tokens: 800, output_tokens: 60 }, inputBytes: 2000 } });
+    if (body.backend === "typesafe") {
+      try {
+        const res = await route.fetch();
+        const data = await res.json();
+        if (data.ok) data.source = "live"; // reported as live so its answers are judged
+        return await route.fulfill({ response: res, json: data });
+      } catch {
+        return; // the page was closed
+      }
+    }
+    if (ctl.failOpenai) return route.fulfill({ json: { ok: false, reason: "error", message: "OpenAI 500: upstream error" } });
+    const answers = Object.fromEntries(body.checks.map((c) => [c.id, { relation: "contradicts", verdict: "contradicted", confidence: 0.9, basis: "self-reported" }]));
+    return route.fulfill({ json: { ok: true, judged: answers, model: "gpt-5", source: "live", elapsedMs: 3100, usage: { input_tokens: 800, output_tokens: 60 }, inputBytes: 2000 } });
   });
   await page.goto(URL_, { waitUntil: "networkidle" });
-  return { ctx, page, calls, errors };
+  return { ctx, page, calls, judged, ctl, errors };
 }
 const settle = (page) => page.waitForFunction(() => !/checking/.test(document.querySelector('table[aria-label="Citation checks"]')?.textContent ?? "x"), null, { timeout: 20000 }).catch(() => {});
 const table = (page) => page.getByRole("table", { name: "Citation checks" });
@@ -178,6 +205,81 @@ const table = (page) => page.getByRole("table", { name: "Citation checks" });
   check(await empty.page.getByText("Nothing in this document could be read as a reference or a key term.").isVisible(), "a document with nothing to check says so");
   check(empty.calls.length === 0, "and makes no model call for it", `${empty.calls.length}`);
   await empty.ctx.close();
+}
+
+// ---- each model's run, Re-check, Retry, a late OpenAI, and the filters ---------------------------------------------------------
+{
+  const { ctx, page, calls, judged, ctl, errors } = await open();
+  await page.getByRole("tab", { name: /^Citations/ }).click();
+  await page.getByText("SaaS Master Services Agreement", { exact: false }).first().click();
+  await table(page).waitFor({ timeout: 15000 });
+  await settle(page);
+  await page.waitForTimeout(2500); // the judge scores the check it chose
+
+  const strip = page.locator("main");
+  const text = await strip.innerText();
+  check(/TypeSafe\s+done in/.test(text) && /OpenAI\s+done in 3\.1s/.test(text), "each model's own run is shown: what it did and how long it took", (text.match(/(TypeSafe|OpenAI)\s+(done|failed|checking|not run)[^\n]*/g) ?? []).join(" | "));
+  check(/gpt-5/.test(text) && /800 in \/ 60 out tokens/.test(text), "...with OpenAI's model and token use");
+  check(judged.length === 2, "the judge scored the check it chose, for both models", `${judged.length}`);
+
+  // Re-check is the full process: both models, and the judge again.
+  await page.getByRole("button", { name: "Re-check" }).click();
+  await settle(page);
+  await page.waitForTimeout(2500);
+  check(calls.length === 4 && calls.slice(2).map((c) => c.backend).sort().join() === "openai,typesafe", "Re-check asks both models again", calls.map((c) => c.backend).join());
+  check(judged.length === 4, "Re-check has the judge score afresh, for both models", `${judged.length}`);
+
+  // A model that fails says so, with the reason, and can be retried alone.
+  ctl.failOpenai = true;
+  await page.getByRole("button", { name: "Re-check" }).click();
+  await page.getByText("OpenAI 500: upstream error").first().waitFor({ timeout: 10000 }).catch(() => {});
+  const failed = await strip.innerText();
+  check(/OpenAI\s+failed/.test(failed) && /OpenAI 500: upstream error/.test(failed), "a failing model is named as failed, with its reason");
+  check(/TypeSafe\s+done in/.test(failed), "...while the other model's answers stay");
+  check((await table(page).getByText("call failed").count()) >= 1, "its cells in the table say so too");
+  check((await page.getByRole("button", { name: "Retry" }).count()) === 1, "and only the failed model offers Retry");
+  const beforeRetry = calls.length;
+  ctl.failOpenai = false;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await page.getByText(/OpenAI\s+done in/).first().waitFor({ timeout: 10000 }).catch(() => {});
+  const retried = calls.slice(beforeRetry).map((c) => c.backend);
+  check(retried.length === 1 && retried[0] === "openai", "Retry asks only that model again", retried.join());
+  check(/OpenAI\s+done in/.test(await strip.innerText()) && (await page.getByRole("button", { name: "Retry" }).count()) === 0, "and it recovers");
+
+  // Filters.
+  const all = await table(page).locator("tbody tr").count();
+  await page.getByRole("button", { name: /^Needs attention/ }).click();
+  const attention = await table(page).locator("tbody tr").count();
+  check(attention > 1 && attention < all, "'Needs attention' narrows the table to the findings", `${attention} of ${all} rows`);
+  check((await page.getByRole("button", { name: /^Needs attention/ }).getAttribute("aria-pressed")) === "true", "the active filter is marked");
+  const dis = page.getByRole("button", { name: /^Models disagree/ });
+  check((await dis.count()) === 1, "'Models disagree' is offered once both models have answered");
+  await dis.click();
+  const disRows = await table(page).locator("tbody tr").count();
+  check(disRows >= 2 && disRows < all, "'Models disagree' shows only the checks the two answered differently", `${disRows} rows`);
+  await page.getByRole("button", { name: /^All/ }).click();
+  check((await table(page).locator("tbody tr").count()) === all, "'All' shows everything again");
+  check(errors.length === 0, "no page errors", errors.join(" | "));
+  await ctx.close();
+}
+{
+  // OpenAI is recognised after the text was first checked: it then runs by itself, and TypeSafe is not asked again.
+  const { ctx, page, calls, ctl, errors } = await open({ width: 1440, height: 900 }, { openaiConfigured: false });
+  await page.getByRole("tab", { name: /^Citations/ }).click();
+  await page.getByText("SaaS Master Services Agreement", { exact: false }).first().click();
+  await table(page).waitFor({ timeout: 15000 });
+  await settle(page);
+  check(calls.map((c) => c.backend).join() === "typesafe", "with no OpenAI key only TypeSafe is asked", calls.map((c) => c.backend).join());
+  check(/OpenAI\s+not run/.test(await page.locator("main").innerText()) && /Save an OpenAI key in Settings/.test(await page.locator("main").innerText()), "OpenAI says it was not run, and how to fix that");
+  ctl.openaiConfigured = true;
+  await page.getByRole("button", { name: "API key settings" }).click();
+  await page.getByRole("dialog").getByLabel("OpenAI API key", { exact: true }).fill("sk-placeholder-openai-000000000000");
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await page.getByText(/OpenAI\s+done in/).first().waitFor({ timeout: 15000 }).catch(() => {});
+  check(calls.map((c) => c.backend).join() === "typesafe,openai", "once a key is saved OpenAI runs by itself, and TypeSafe is not asked again", calls.map((c) => c.backend).join());
+  check((await table(page).getByText("Contradicted").count()) >= 3 && /agree:\s*\d\/\d/.test(await page.locator("main").innerText()), "its answers fill in beside TypeSafe's");
+  check(errors.length === 0, "no page errors", errors.join(" | "));
+  await ctx.close();
 }
 
 // ---- a phone, and accessibility -----------------------------------------------------------------------------------------------
