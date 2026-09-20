@@ -29,7 +29,7 @@ async function callBatch(backend: "typesafe" | "openai", extraction: Extraction,
 
 const settled = (r: CitationBatchResult): SideRun =>
   r.ok
-    ? { status: "done", judged: r.judged, model: r.model, source: r.source, elapsedMs: r.elapsedMs, usage: r.usage }
+    ? { status: "done", judged: r.judged, model: r.model, source: r.source, elapsedMs: r.elapsedMs, usage: r.usage, ...(r.fallbackFrom ? { fallbackFrom: r.fallbackFrom } : {}) }
     : { ...emptySide(r.reason === "not_configured" ? "skipped" : "error"), reason: r.reason, message: r.message };
 
 /** OpenAI is not run when there is no key for it: said as such, so it can be started later if a key arrives. */

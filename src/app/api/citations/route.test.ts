@@ -49,6 +49,15 @@ describe("POST /api/citations: OpenAI", () => {
     expect(state.checks.term_liability.claim).toBe(checks.find((c) => c.id === "term_liability")!.claim);
   });
 
+  it("says when OpenAI judged on a different model than the one asked for, and stays quiet when it did not", async () => {
+    const swapped = opinion({ term_liability: "contradicts" });
+    if (swapped.ok) swapped.result = { ...swapped.result, model: "gpt-4o-mini-2024-07-18", fallbackFrom: "gpt-6-astra" };
+    runMock.mockResolvedValueOnce(swapped);
+    expect(await (await post({ backend: "openai", checks })).json()).toMatchObject({ ok: true, model: "gpt-4o-mini-2024-07-18", fallbackFrom: "gpt-6-astra" });
+    runMock.mockResolvedValueOnce(opinion({ term_liability: "contradicts" }));
+    expect((await (await post({ backend: "openai", checks })).json()).fallbackFrom).toBeUndefined();
+  });
+
   it("passes a failed or unconfigured call straight through, so the table can say why", async () => {
     runMock.mockResolvedValue({ ok: false, reason: "not_configured" } satisfies OpenAIRunOutcome);
     expect(await (await post({ backend: "openai", checks })).json()).toEqual({ ok: false, reason: "not_configured" });

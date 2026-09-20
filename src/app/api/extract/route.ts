@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { guardApi } from "@/lib/api/guard";
 import { createRequire } from "node:module";
 import mammoth from "mammoth";
 
@@ -45,6 +46,8 @@ async function extractText(buffer: Buffer, ext: string): Promise<string> {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = guardApi(req);
+  if (blocked) return blocked;
   try {
     const form = await req.formData();
     const file = form.get("file");

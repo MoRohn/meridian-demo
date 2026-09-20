@@ -63,6 +63,13 @@ describe("writeReply with a model", () => {
     expect(user).toContain("Analyze this contract"); // the conversation so far
   });
 
+  it("records the exact size of the request that wrote the reply, so the Context Window can count it", async () => {
+    fetchMock.mockResolvedValueOnce(ok("fine"));
+    const out = await writeReply(args());
+    expect(out.answer.inputBytes).toBe(Buffer.byteLength(fetchMock.mock.calls[0][1].body, "utf8"));
+    expect(out.answer.inputBytes).toBeGreaterThan(0);
+  });
+
   it("uses the key saved in Settings ahead of the environment's", async () => {
     process.env.OPENAI_API_KEY = "sk-env";
     fetchMock.mockResolvedValueOnce(ok("fine"));

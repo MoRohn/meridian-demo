@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SAMPLE_CONTRACTS } from "../data/sampleContracts";
-import { extractChecks, sectionLabel } from "./extract";
+import { MAX_REFERENCES, extractChecks, sectionLabel } from "./extract";
 import { durations, jurisdiction, money } from "./topics";
 
 const [saas, nda, employment] = SAMPLE_CONTRACTS;
@@ -128,6 +128,34 @@ describe("references written in the text", () => {
     expect(ref.note).toBe("Section 9 does not exist in this document.");
   });
 
+  describe("a Section number that is not in the document", () => {
+    const doc = (sentence: string) => `1. Scope. The services are described here.\n\n2. Price. ${sentence}\n\n3. Term. This runs for one year.`;
+    const ref = (sentence: string) => run(doc(sentence)).checks.find((c) => c.kind === "reference");
+
+    it("is an outside citation, not a broken reference, when it names the outside source", () => {
+      expect(ref("The additional transfer tax identified in Section 1402 of the Revenue Code applies.")).toMatchObject({ resolution: "external", title: "Cites Section 1402" });
+      expect(ref("As required by Section 12 of the Companies Act, Seller shall register.")?.resolution).toBe("external");
+      expect(ref("Taxes under Section 5(a) of Title 26 are excluded.")?.resolution).toBe("external");
+    });
+
+    it("is an outside citation when its number is far beyond anything the document numbers", () => {
+      const r = ref("The additional transfer tax identified in Section 1402 shall be paid by Buyer.");
+      expect(r?.resolution).toBe("external");
+      expect(r?.note).toMatch(/outside law/);
+    });
+
+    it("stays broken when it is a small miss next to the document's own clauses", () => {
+      expect(ref("See Section 9 for details.")?.resolution).toBe("broken");
+      expect(ref("See Section 40 for details.")?.resolution).toBe("broken");
+    });
+
+    it("keeps a reference that names this document as internal: broken if the clause is missing, judged if it exists", () => {
+      expect(ref("See Section 9 of this Agreement.")?.resolution).toBe("broken");
+      expect(ref("See Section 9 of the Lease.")?.resolution).toBe("broken");
+      expect(ref("See Section 3 of the Lease.")?.resolution).toBe("model"); // a real clause, named as part of this document
+    });
+  });
+
   it("does not treat a legal citation's numbers as sections of the document", () => {
     const e = run("1. Data. Vendor shall comply with GDPR Article 28 and 15 U.S.C. § 1681.\n\n2. Fees. Due in thirty (30) days.");
     const refs = e.checks.filter((c) => c.kind === "reference");
@@ -161,6 +189,18 @@ describe("references written in the text", () => {
   it("caps how many references one document can raise", () => {
     const many = Array.from({ length: 30 }, (_, i) => `${i + 1}. S${i}. See Section ${i + 40}.`).join("\n\n");
     expect(run(many).checks.filter((c) => c.kind === "reference")).toHaveLength(12);
+  });
+
+  it("says how many references the cap left out, rather than dropping them silently", () => {
+    const many = Array.from({ length: 30 }, (_, i) => `${i + 1}. S${i}. See Section ${i + 40}.`).join("\n\n");
+    const e = run(many);
+    const checked = e.checks.filter((c) => c.kind === "reference").length;
+    expect(checked).toBe(MAX_REFERENCES);
+    expect(e.omittedReferences).toBe(30 - MAX_REFERENCES);
+  });
+
+  it("reports nothing omitted when every reference fit", () => {
+    expect(run("1. Term. See Section 2.\n\n2. Fees. Fees are due.").omittedReferences).toBeUndefined();
   });
 });
 

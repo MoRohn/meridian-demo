@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiError, guardApi } from "@/lib/api/guard";
 import { systemOne, type KeyOverride } from "@/lib/typesafe/client";
+import { typesafeRequestBytes } from "@/lib/typesafe/measure";
 import {
   buildExcerptQuestions,
   buildExcerptState,
@@ -18,10 +20,12 @@ export const runtime = "nodejs";
  * independently-timed activity indicators instead of one blended one.
  */
 export async function POST(req: NextRequest) {
+  const blocked = guardApi(req);
+  if (blocked) return blocked;
   try {
-    const body = (await req.json()) as { text?: string; override?: KeyOverride };
-    const text = body?.text?.trim();
-    if (!text) return NextResponse.json({ error: "text is required" }, { status: 400 });
+    const body = (await req.json()) as { text?: unknown; override?: KeyOverride };
+    const text = typeof body?.text === "string" ? body.text.trim() : "";
+    if (!text) return apiError("text is required", 400);
 
     const excerpt = text.slice(0, MAX_EXCERPT_CHARS);
     const questions = buildExcerptQuestions();
@@ -41,10 +45,10 @@ export async function POST(req: NextRequest) {
       source: response.source,
       usage: response.usage,
       elapsedMs: response.elapsedMs,
-      inputBytes: Buffer.byteLength(JSON.stringify(excerptState), "utf8"),
+      inputBytes: typesafeRequestBytes(excerptState, questions),
     });
   } catch (err) {
     console.error("[api/analyze-excerpt] error:", err);
-    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+    return apiError("Internal error", 500);
   }
 }

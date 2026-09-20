@@ -16,6 +16,8 @@ export interface SideRun {
   source?: "live" | "mock";
   elapsedMs?: number;
   usage?: { input_tokens: number; output_tokens: number };
+  /** The model that was asked for, when another one judged because it was not available on the key. */
+  fallbackFrom?: string;
   reason?: "not_configured" | "error";
   message?: string;
 }

@@ -1,4 +1,4 @@
-import { DEFAULT_MODEL, FALLBACK_MODEL, OPENAI_API_URL, isReasoningModel, looksLikeModelUnavailable } from "./client";
+import { DEFAULT_MODEL, FALLBACK_MODEL, OPENAI_API_URL, OPENAI_TIMEOUT_MS, describeFetchError, isReasoningModel, looksLikeModelUnavailable } from "./client";
 import type { KeyOverride } from "../typesafe/client";
 
 /**
@@ -10,10 +10,8 @@ import type { KeyOverride } from "../typesafe/client";
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export type ChatOutcome =
-  | { ok: true; text: string; model: string; usage: { input_tokens: number; output_tokens: number }; elapsedMs: number; fallbackFrom?: string }
+  | { ok: true; text: string; model: string; usage: { input_tokens: number; output_tokens: number }; inputBytes: number; elapsedMs: number; fallbackFrom?: string }
   | { ok: false; reason: "not_configured" | "error"; message?: string };
-
-const TIMEOUT_MS = 60_000;
 
 async function attempt(model: string, apiKey: string, messages: ChatMessage[]): Promise<ChatOutcome & { status?: number }> {
   const started = performance.now();
@@ -25,12 +23,13 @@ async function attempt(model: string, apiKey: string, messages: ChatMessage[]): 
     max_completion_tokens: reasoning ? 6000 : 1200,
     ...(reasoning ? { reasoning_effort: "low" } : { temperature: 0.3 }),
   };
+  const payload = JSON.stringify(body);
   try {
     const res = await fetch(OPENAI_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: payload,
+      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
     });
     const elapsedMs = Math.round(performance.now() - started);
     if (!res.ok) {
@@ -45,10 +44,11 @@ async function attempt(model: string, apiKey: string, messages: ChatMessage[]): 
       text,
       model: data.model ?? model,
       usage: { input_tokens: data.usage?.prompt_tokens ?? 0, output_tokens: data.usage?.completion_tokens ?? 0 },
+      inputBytes: Buffer.byteLength(payload, "utf8"),
       elapsedMs,
     };
   } catch (err) {
-    return { ok: false, reason: "error", message: (err as Error).message };
+    return { ok: false, reason: "error", message: describeFetchError(err) };
   }
 }
 

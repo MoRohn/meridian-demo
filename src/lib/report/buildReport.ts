@@ -5,6 +5,7 @@ import { describeIntegrity } from "../eval/integrity";
 import { EVAL_KIND_IDS } from "../eval/kinds";
 import type { StoredEvaluationRow } from "../eval/store";
 import type { EvalKind, EvalResult } from "../eval/types";
+import type { ResponseMetrics } from "../eval/response";
 import type { TraceEntry } from "../orchestrator/run";
 import { questionLabel } from "../trace/labels";
 import type { Block, ReportDoc, ReportFormat } from "./doc";
@@ -97,19 +98,23 @@ function cellFor(evals: readonly StoredEvaluationRow[], scope: string, backend: 
 
 // ---- 1. the data table ---------------------------------------------------
 
+/** How long the answering model took to respond, from the call that produced the answer. n/a when nothing was measured. */
+const responseTime = (r: ResponseMetrics | null | undefined) => (r?.ms != null ? formatElapsed(r.ms) : NA);
+/** What that call was billed. n/a when nothing was measured; a call that really cost nothing is $0, not n/a. */
+const responseCost = (r: ResponseMetrics | null | undefined) => (r?.costUsd != null ? fmtUsd(r.costUsd) : NA);
+
 const COLUMNS = [
   "Activity",
   "Scope",
   "Model",
   "Status",
+  "Resp. time",
+  "Resp. cost",
   "Score",
   "Result",
   "Pass at",
   "Band (0-10)",
   "Rubric",
-  "Judge model",
-  "Judge time",
-  "Judge cost",
   "Integrity",
   "Judge's explanation",
 ];
@@ -119,21 +124,20 @@ export function buildReportTable(evals: readonly StoredEvaluationRow[]): ReportT
   const rows: string[][] = [];
   for (const s of surfaces(evals)) {
     for (const backend of BACKENDS) {
-      const { result, status } = cellFor(evals, s.scope, backend);
+      const { row, result, status } = cellFor(evals, s.scope, backend);
       const band = result ? bandFor(result) : null;
       rows.push([
         activityName(s),
         s.area,
         BACKEND_NAMES[backend],
         status,
+        responseTime(row?.response),
+        responseCost(row?.response),
         result ? pct(result.score) : NA,
         result ? (result.success ? "Pass" : "Fail") : NA,
         result ? pct(result.threshold) : NA,
         band ? `${band.low}-${band.high}` : NA,
         result ? `${result.rubric.id} v${result.rubric.version}` : NA,
-        result?.judgeModel ?? NA,
-        result ? formatElapsed(result.latencyMs) : NA,
-        result?.judgeCostUsd != null ? fmtUsd(result.judgeCostUsd) : NA,
         result ? (result.integrity.status === "suspicious" ? "Suspicious" : "Clean") : NA,
         result ? result.reason : NA,
       ].map((v, i) => cell(v, i === COLUMNS.length - 1 ? REASON_MAX : CELL_MAX)));
@@ -168,7 +172,7 @@ function surfaceSection(s: Surface, evals: readonly StoredEvaluationRow[], title
     }
     const r = c.result;
     const band = bandFor(r);
-    out.push(para(`Judge time ${formatElapsed(r.latencyMs)}, judge cost ${r.judgeCostUsd != null ? fmtUsd(r.judgeCostUsd) : NA}.`, `Score: ${pct(r.score)} (${Math.round(r.score * 10)}/10), ${r.success ? "Pass" : "Fail"}.`));
+    out.push(para(`Response time ${responseTime(c.row?.response)}, response cost ${responseCost(c.row?.response)}.`, `Score: ${pct(r.score)} (${Math.round(r.score * 10)}/10), ${r.success ? "Pass" : "Fail"}.`));
     out.push(para("", "Explanation."), { type: "quote", text: r.reason.trim() });
     if (band) out.push(para(`Band ${band.low}-${band.high}: ${band.outcome}`, `What ${band.points}/10 means.`));
     const integrity = describeIntegrity(r);
@@ -282,7 +286,7 @@ export function buildReportDoc(input: ReportInput): ReportDoc {
     blocks.push(para("No evaluations have run yet. Analyze a contract, then open a tab to score it.", undefined, "muted"));
   } else {
     blocks.push({ type: "table", columns: table.columns, rows: table.rows });
-    blocks.push(para("Score is the judge's 0-100% rating of the answer against the source text. Pass at is the threshold for that rubric. Band is the 0-10 score band the score falls in (what that band means is spelled out below). Scores are comparable only within one rubric version.", undefined, "muted"));
+    blocks.push(para("Resp. time and Resp. cost are the answering model's own response time and billed cost for the call behind the answer, not the judge's. Score is the judge's 0-100% rating of how well the answer is supported by the source text: its confidence in the model's response. Pass at is the threshold for that rubric. Band is the 0-10 score band the score falls in (what that band means is spelled out below). Scores are comparable only within one rubric version. One call answers both Risk and Compliance, and one batched call answers every citation check, so those rows share their call's figures, and an Assistant reply adds the model that wrote it. n/a means no measured call.", undefined, "muted"));
   }
 
   const scoring = scoringSections(evals);

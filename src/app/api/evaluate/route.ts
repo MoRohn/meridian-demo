@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiError, guardApi } from "@/lib/api/guard";
 import { EVAL_KIND_IDS } from "@/lib/eval/kinds";
 import { describeServiceError, parseJudgeFailure } from "@/lib/eval/serviceError";
 import { toEvalHealth, type EvalHealth } from "@/lib/eval/health";
@@ -11,6 +12,12 @@ export const runtime = "nodejs";
 
 const EVAL_SERVICE_URL = process.env.EVAL_SERVICE_URL || "http://localhost:8008";
 const EVAL_TIMEOUT_MS = 60_000;
+/** Shared secret the service may require (EVAL_SERVICE_TOKEN); sent server-to-server only, never to the browser. */
+const EVAL_SERVICE_TOKEN = process.env.EVAL_SERVICE_TOKEN?.trim();
+/** The service's own limits (eval-service/main.py): a request over one is rejected there, so it is rejected here first with a clear reason. */
+const MAX_INPUT_CHARS = 20_000;
+const MAX_OUTPUT_CHARS = 20_000;
+const MAX_CONTEXT_CHARS = 120_000;
 const KINDS: readonly string[] = EVAL_KIND_IDS;
 const BACKENDS: readonly string[] = ["typesafe", "openai"];
 const JUDGE_PROVIDERS = ["openai", "anthropic", "gemini"] as const;
@@ -40,26 +47,37 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = guardApi(req);
+  if (blocked) return blocked;
   let body: EvalRequest;
   try {
     body = (await req.json()) as EvalRequest;
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return apiError("Invalid JSON body", 400);
   }
 
-  if (!KINDS.includes(body?.kind) || !BACKENDS.includes(body?.backend) || !body?.actualOutput || typeof body.input !== "string") {
-    return NextResponse.json({ error: "kind, backend, input, and actualOutput are required" }, { status: 400 });
+  if (!body || typeof body !== "object" || !KINDS.includes(body.kind) || !BACKENDS.includes(body.backend)) {
+    return apiError("kind and backend must each be one of the supported values", 400);
+  }
+  if (typeof body.input !== "string" || body.input.length > MAX_INPUT_CHARS) {
+    return apiError(`input must be a string of at most ${MAX_INPUT_CHARS} characters`, 400);
+  }
+  if (typeof body.actualOutput !== "string" || !body.actualOutput.trim() || body.actualOutput.length > MAX_OUTPUT_CHARS) {
+    return apiError(`actualOutput must be a non-empty string of at most ${MAX_OUTPUT_CHARS} characters`, 400);
+  }
+  if (body.context != null && (typeof body.context !== "string" || body.context.length > MAX_CONTEXT_CHARS)) {
+    return apiError(`context must be a string of at most ${MAX_CONTEXT_CHARS} characters`, 400);
   }
 
   // Who judges, from Settings: a provider, a model, and that provider's key. Provider and model are validated here as the
   // service validates them, so nothing but a known provider and a model-shaped id is ever forwarded.
   const provider = body.override?.provider;
   if (provider !== undefined && !(JUDGE_PROVIDERS as readonly string[]).includes(provider)) {
-    return NextResponse.json({ error: `provider must be one of: ${JUDGE_PROVIDERS.join(", ")}` }, { status: 400 });
+    return apiError(`provider must be one of: ${JUDGE_PROVIDERS.join(", ")}`, 400);
   }
   const judgeModel = body.override?.model;
   if (judgeModel !== undefined && (typeof judgeModel !== "string" || !MODEL_ID.test(judgeModel))) {
-    return NextResponse.json({ error: "model is not a valid model id" }, { status: 400 });
+    return apiError("model is not a valid model id", 400);
   }
 
   // A key saved in Settings is used for the judge on this request only. It goes to the service in a header (never the
@@ -79,6 +97,7 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(EVAL_SERVICE_TOKEN ? { "X-Eval-Token": EVAL_SERVICE_TOKEN } : {}),
         ...(canSendKey ? { "X-Judge-Api-Key": savedKey } : {}),
         ...(provider ? { "X-Judge-Provider": provider } : {}),
         ...(judgeModel ? { "X-Judge-Model": judgeModel } : {}),

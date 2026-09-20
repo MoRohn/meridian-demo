@@ -59,6 +59,16 @@ describe("a full run", () => {
     expect(log.metrics.sort()).toEqual(["openai", "typesafe"]);
   });
 
+  it("keeps the model OpenAI was asked for when another judged, so the tab can say so", async () => {
+    const { d } = deps();
+    const run = startRun("swap", extraction, d);
+    answer("typesafe", ok("contradicts"));
+    answer("openai", { ...ok("contradicts"), model: "gpt-4o-mini-2024-07-18", fallbackFrom: "gpt-6-astra" });
+    await run;
+    expect(citationStore.get("swap")?.openai).toMatchObject({ status: "done", model: "gpt-4o-mini-2024-07-18", fallbackFrom: "gpt-6-astra" });
+    expect(citationStore.get("swap")?.typesafe.fallbackFrom).toBeUndefined();
+  });
+
   it("sends only what a model can judge: every check with a source, and none decided by rule", () => {
     startRun("s", extraction, deps().d);
     for (const call of calls) expect(call.sent).toEqual(ids);

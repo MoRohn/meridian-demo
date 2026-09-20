@@ -7,8 +7,9 @@
  *
  * `npm run meridian` starts it for you when the setup has been done (set MERIDIAN_EVAL=0 to skip).
  * The judge key comes from, in order: a key saved in Meridian's Settings (sent with each evaluation),
- * OPENAI_API_KEY in the environment, or eval-service/.env.
+ * OPENAI_API_KEY in the environment (including the repo's .env.local, loaded by scripts/load-env.mjs), or eval-service/.env.
  */
+import "./load-env.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -18,6 +19,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const SERVICE_DIR = path.join(ROOT, "eval-service");
 export const SERVICE_PORT = Number(process.env.EVAL_SERVICE_PORT || 8008);
+/** Loopback by default: the service spends judge-model credits and is only ever called by Meridian's own server. Set EVAL_SERVICE_HOST to expose it deliberately (and set EVAL_SERVICE_TOKEN when you do). */
+export const SERVICE_HOST = process.env.EVAL_SERVICE_HOST || "127.0.0.1";
 const isWin = process.platform === "win32";
 
 const venvBin = (name) => path.join(SERVICE_DIR, ".venv", isWin ? "Scripts" : "bin", isWin ? `${name}.exe` : name);
@@ -31,7 +34,7 @@ export function isPortFree(port) {
 
 /** Starts the service. `output: "inherit"` streams its log as it is; "prefixed" tags each line so it can share a terminal with another process. */
 export function startEvalService({ output = "inherit" } = {}) {
-  const child = spawn(venvBin("uvicorn"), ["main:app", "--port", String(SERVICE_PORT)], {
+  const child = spawn(venvBin("uvicorn"), ["main:app", "--host", SERVICE_HOST, "--port", String(SERVICE_PORT)], {
     cwd: SERVICE_DIR,
     stdio: output === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
   });

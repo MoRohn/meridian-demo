@@ -45,7 +45,7 @@ function composeAnalysisReply(
   session: SessionState,
   risk: CompositeRisk,
   flags: ComplianceFlag[],
-  urgency: ScoreAnswer
+  urgency: ScoreAnswer | undefined
 ): string {
   const docName = session.activeDocument?.name ?? "this document";
   const riskLabel = risk.overall >= 0.66 ? "high" : risk.overall >= 0.33 ? "moderate" : "low";
@@ -73,7 +73,7 @@ function composeAnalysisReply(
     );
   }
 
-  if (urgency.score >= 1.5) {
+  if (urgency && urgency.score >= 1.5) {
     lines.push("This also reads as time-sensitive — worth prioritizing over routine review queue items.");
   }
 
@@ -153,13 +153,15 @@ export function composeTurn(session: SessionState, answers: Record<string, Answe
       used.add("contract_type");
     }
 
-    const intentAns = answers.intent as ChoiceAnswer;
-    const urgencyAns = answers.urgency as ScoreAnswer;
+    // Either backend can come back without an answer for a field (OpenAI's tool call may omit one, and a partial
+    // TypeSafe response is possible), so a missing intent is "could not route" and a missing urgency is "not urgent".
+    const intentAns = answers.intent as ChoiceAnswer | undefined;
+    const urgencyAns = answers.urgency as ScoreAnswer | undefined;
     used.add("intent");
     used.add("urgency");
-    intentSummary = { choice: intentAns.choice, confidence: intentAns.confidence };
+    if (intentAns) intentSummary = { choice: intentAns.choice, confidence: intentAns.confidence };
 
-    if (intentAns.confidence < INTENT_CONFIDENCE_FLOOR) {
+    if (!intentAns || intentAns.confidence < INTENT_CONFIDENCE_FLOOR) {
       reply =
         "I want to make sure I route this correctly — are you looking to (1) analyze a contract for risk, " +
         "(2) check specific compliance flags, (3) verify a citation, or (4) get a recap of this context?";

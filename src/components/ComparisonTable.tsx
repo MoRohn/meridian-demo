@@ -108,12 +108,21 @@ export function ComparisonTable({
                     </span>
                   )}
                 </th>
-                <td className="px-2 py-1.5" title={typeof row.ts === "string" ? undefined : row.ts.detail}>
-                  <CellView cell={row.ts} />
-                </td>
-                <td className="px-2 py-1.5">
-                  <CellView cell={row.oa} />
-                </td>
+                {row.ruleDecided ? (
+                  <td colSpan={2} className="px-2 py-1.5">
+                    <CellView cell={row.ts} />
+                    <span className="mt-0.5 block text-[11px] leading-snug text-muted">Decided by rule &middot; no model involved</span>
+                  </td>
+                ) : (
+                  <>
+                    <td className="px-2 py-1.5" title={typeof row.ts === "string" ? undefined : row.ts.detail}>
+                      <CellView cell={row.ts} />
+                    </td>
+                    <td className="px-2 py-1.5" title={typeof row.oa === "string" ? undefined : row.oa.detail}>
+                      <CellView cell={row.oa} />
+                    </td>
+                  </>
+                )}
                 <td className="px-2 py-1.5">
                   <Match match={row.match} />
                 </td>

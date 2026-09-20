@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiError, guardApi } from "@/lib/api/guard";
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import type { KeyOverride } from "@/lib/typesafe/client";
 
@@ -14,6 +15,8 @@ const OPENAI_MODELS_URL = "https://api.openai.com/v1/models";
  * a key doesn't burn a real judgment just to prove it's valid.
  */
 export async function POST(req: NextRequest) {
+  const blocked = guardApi(req);
+  if (blocked) return blocked;
   try {
     const body = (await req.json()) as { typesafeOverride?: KeyOverride; openaiOverride?: KeyOverride };
 
@@ -25,7 +28,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ typesafeValid, openaiValid });
   } catch (err) {
     console.error("[api/validate-keys] error:", err);
-    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+    return apiError("Internal error", 500);
   }
 }
 
@@ -45,7 +48,7 @@ async function validateOpenaiKey(override?: KeyOverride): Promise<boolean | null
   const apiKey = override?.apiKey?.trim();
   if (!apiKey) return null;
   try {
-    const res = await fetch(OPENAI_MODELS_URL, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const res = await fetch(OPENAI_MODELS_URL, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(10_000) });
     return res.ok;
   } catch {
     return false;

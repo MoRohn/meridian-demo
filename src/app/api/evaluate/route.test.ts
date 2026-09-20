@@ -192,3 +192,48 @@ describe("POST /api/evaluate: one verdict rule for every judge", () => {
     expect([r.score, r.success]).toEqual([0.85, true]);
   });
 });
+
+describe("POST /api/evaluate request validation", () => {
+  it("refuses an actualOutput that is not a non-empty string of sane length, without calling the service", async () => {
+    const POST = await load("http://localhost:8008");
+    for (const actualOutput of [undefined, "", "   ", 42, { text: "x" }, ["x"], "x".repeat(20_001)]) {
+      const res = await post(POST, { ...BODY, actualOutput });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/actualOutput/);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a bad input or context, and an unknown kind or backend", async () => {
+    const POST = await load("http://localhost:8008");
+    expect((await post(POST, { ...BODY, input: 5 })).status).toBe(400);
+    expect((await post(POST, { ...BODY, input: "x".repeat(20_001) })).status).toBe(400);
+    expect((await post(POST, { ...BODY, context: { a: 1 } })).status).toBe(400);
+    expect((await post(POST, { ...BODY, context: "x".repeat(120_001) })).status).toBe(400);
+    expect((await post(POST, { ...BODY, kind: "nope" })).status).toBe(400);
+    expect((await post(POST, { ...BODY, backend: "nope" })).status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a request with no context", async () => {
+    const POST = await load("http://localhost:8008");
+    const noContext: Partial<typeof BODY> = { ...BODY };
+    delete noContext.context;
+    expect((await post(POST, noContext)).status).toBe(200);
+  });
+});
+
+describe("POST /api/evaluate service token", () => {
+  it("sends X-Eval-Token to the service when one is configured, and nothing when it is not", async () => {
+    vi.stubEnv("EVAL_SERVICE_TOKEN", "shared-secret");
+    let POST = await load("http://localhost:8008");
+    await post(POST, BODY);
+    expect(upstream().headers["X-Eval-Token"]).toBe("shared-secret");
+
+    fetchMock.mockClear();
+    vi.stubEnv("EVAL_SERVICE_TOKEN", "");
+    POST = await load("http://localhost:8008");
+    await post(POST, BODY);
+    expect(upstream().headers).not.toHaveProperty("X-Eval-Token");
+  });
+});

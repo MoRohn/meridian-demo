@@ -20,6 +20,8 @@ export interface TurnAnswer {
   source: "model" | "document" | "template";
   model?: string;
   usage?: { input_tokens: number; output_tokens: number };
+  /** Exact UTF-8 size of the request that wrote the reply (document, conversation, findings and instructions). */
+  inputBytes?: number;
   elapsedMs?: number;
   costUsd?: number;
   /** Why a model answer was not used when one was expected (a failed call), or that the requested model was swapped. */
@@ -83,6 +85,7 @@ export async function writeReply(args: {
         source: "model",
         model: written.model,
         usage: written.usage,
+        inputBytes: written.inputBytes,
         elapsedMs: written.elapsedMs,
         costUsd: openaiCostUsd(written.model, written.usage),
         ...(written.fallbackFrom ? { note: `${written.fallbackFrom} was not available on this key, so ${written.model} wrote this answer.` } : {}),

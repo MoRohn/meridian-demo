@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiError, guardApi } from "@/lib/api/guard";
 import { buildBatch, judgedFromOpenAI, judgedFromTypesafe, type BatchCheck, type Judged } from "@/lib/citations/batch";
 import { runOpenAIEquivalent } from "@/lib/openai/client";
 import { systemOne, type KeyOverride } from "@/lib/typesafe/client";
+import { typesafeRequestBytes } from "@/lib/typesafe/measure";
 
 export const runtime = "nodejs";
 
@@ -12,7 +14,7 @@ const ID = /^[a-z0-9_]{1,40}$/;
 
 /** What one backend returns for a batch: every check's answer read into a relation and a verdict, plus what the call measured. */
 export type CitationBatchResult =
-  | { ok: true; judged: Record<string, Judged>; model: string; source: "live" | "mock"; elapsedMs: number; usage: { input_tokens: number; output_tokens: number }; inputBytes: number }
+  | { ok: true; judged: Record<string, Judged>; model: string; source: "live" | "mock"; elapsedMs: number; usage: { input_tokens: number; output_tokens: number }; inputBytes: number; fallbackFrom?: string }
   | { ok: false; reason: "not_configured" | "error"; message?: string };
 
 function parse(body: unknown): { backend: "typesafe" | "openai"; checks: BatchCheck[]; override?: KeyOverride } | string {
@@ -32,16 +34,22 @@ function parse(body: unknown): { backend: "typesafe" | "openai"; checks: BatchCh
 /**
  * Judges every check of a document or passage against its source in one request to one backend. The client fires TypeSafe's
  * and OpenAI's at the same moment, each resolving on its own, exactly as a chat turn does (see /api/compare-openai).
+ *
+ * Errors follow the contract in lib/api/guard.ts, with one deliberate reading of it: a malformed request is a 400 `{ error }`,
+ * but a backend that fails (its key is missing, the provider is down, the call throws) is an outcome, answered 200 with
+ * `{ ok: false, reason, message }`, so the page can show one side failing beside the other side's answers.
  */
 export async function POST(req: NextRequest) {
+  const blocked = guardApi(req);
+  if (blocked) return blocked;
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return apiError("Invalid JSON body", 400);
   }
   const parsed = parse(body);
-  if (typeof parsed === "string") return NextResponse.json({ error: parsed }, { status: 400 });
+  if (typeof parsed === "string") return apiError(parsed, 400);
 
   const batch = buildBatch(parsed.checks)!;
   const ids = parsed.checks.map((c) => c.id);
@@ -55,7 +63,7 @@ export async function POST(req: NextRequest) {
         source: response.source,
         elapsedMs: response.elapsedMs,
         usage: response.usage,
-        inputBytes: Buffer.byteLength(JSON.stringify(batch.state), "utf8"),
+        inputBytes: typesafeRequestBytes(batch.state, batch.questions),
       };
       return NextResponse.json(result);
     }
@@ -69,6 +77,8 @@ export async function POST(req: NextRequest) {
       elapsedMs: outcome.result.elapsedMs,
       usage: outcome.result.usage,
       inputBytes: outcome.result.requestBytes,
+      // The model asked for was not available on this key and another judged instead; the page says so.
+      ...(outcome.result.fallbackFrom ? { fallbackFrom: outcome.result.fallbackFrom } : {}),
     };
     return NextResponse.json(result);
   } catch (err) {

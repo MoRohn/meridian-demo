@@ -48,6 +48,8 @@ export interface Extraction {
   checks: Check[];
   /** How many clauses the text was split into. */
   sections: number;
+  /** How many references beyond the cap were found and left unchecked. Absent when nothing was left out. */
+  omittedReferences?: number;
 }
 
 const collapse = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -160,21 +162,47 @@ const LEGAL: [RegExp, string][] = [
 ];
 const ATTACHMENT = /\b(?:Exhibit|Schedule|Appendix|Annex|Addendum)\s+[A-Z0-9]{1,3}\b/g;
 
-const MAX_REFERENCES = 12;
+/** The most references one text raises. Any beyond it are counted (see Extraction.omittedReferences), never silently dropped. */
+export const MAX_REFERENCES = 12;
+
+/** Words that, after "of the", still mean this document ("Section 4 of the Lease"), so the reference is internal. */
+const OWN_DOCUMENT = /^(?:this\b|the\s+(?:this\s+)?(?:Agreement|Lease|Contract|MSA|Order|Addendum|Exhibit|Schedule|Policy|Plan|Terms)\b|(?:Agreement|Lease|Contract)\b)/i;
+
+/** What follows a reference names a source outside the document: "of the Internal Revenue Code", "of Title 26", "of the Municipal Code". */
+const OUTSIDE_SOURCE = /^\s*(?:\([a-z0-9]+\)\s*)*,?\s*(?:of|under)\s+((?:the\s+)?[A-Z0-9][^.;]*)/;
+
+/**
+ * Whether a "Section N" that is not among this document's clauses is most likely a citation to something else, rather
+ * than a broken reference to this document. Two clues, either of which is enough: what follows it names an outside source
+ * ("Section 1402 of the Internal Revenue Code"), or its number is far beyond anything this document numbers (a lease with
+ * thirty clauses does not cite its own Section 1402). A small miss next to real clauses (Section 9 of 6) stays broken.
+ */
+function pointsOutside(number: string, after: string, numbered: DocSection[]): boolean {
+  const named = after.match(OUTSIDE_SOURCE);
+  if (named && !OWN_DOCUMENT.test(named[1].trim())) return true;
+  const top = Math.max(0, ...numbered.map((s) => parseInt(s.number, 10)).filter(Number.isFinite));
+  const n = parseInt(number, 10);
+  return Number.isFinite(n) && n >= 100 && n > top * 4;
+}
 
 /** Finds the target of an internal reference among the whole document's numbered clauses: "4.2" falls back to clause 4, which is not split further. */
 function targetOf(number: string, numbered: DocSection[]): DocSection | null {
   return numbered.find((s) => s.number === number) ?? numbered.find((s) => number.startsWith(`${s.number}.`)) ?? null;
 }
 
-function referenceChecks(sections: DocSection[], full: DocSection[]): Check[] {
+function referenceChecks(sections: DocSection[], full: DocSection[]): { checks: Check[]; omitted: number } {
   const numbered = full.filter((s) => s.id.startsWith("Doc §"));
   const checks: Check[] = [];
   const seen = new Set<string>();
+  let omitted = 0;
 
   const add = (c: Omit<Check, "id" | "kind" | "facts">, dedupe: string) => {
-    if (seen.has(dedupe) || checks.length >= MAX_REFERENCES) return;
+    if (seen.has(dedupe)) return;
     seen.add(dedupe);
+    if (checks.length >= MAX_REFERENCES) {
+      omitted += 1;
+      return;
+    }
     checks.push({ ...c, id: `ref_${checks.length + 1}`, kind: "reference", facts: [] });
   };
 
@@ -192,7 +220,11 @@ function referenceChecks(sections: DocSection[], full: DocSection[]): Check[] {
           if (numbered.length === 0) {
             add({ ...base, resolution: "external", question: null, source: null, sourceId: null, note: "This text has no numbered sections, so a section reference cannot be resolved." }, `${number}|${sentence}`);
           } else if (!target) {
-            add({ ...base, resolution: "broken", question: null, source: null, sourceId: null, note: `Section ${number} does not exist in this document.` }, `${number}|${sentence}`);
+            if (pointsOutside(number, masked.slice((m.index ?? 0) + m[0].length), numbered)) {
+              add({ ...base, resolution: "external", question: null, source: null, sourceId: null, note: `Section ${number} is not one of this document's clauses. It appears to cite outside law or another document, so it cannot be checked here.` }, `${number}|${sentence}`);
+            } else {
+              add({ ...base, resolution: "broken", question: null, source: null, sourceId: null, note: `Section ${number} does not exist in this document.` }, `${number}|${sentence}`);
+            }
           } else {
             add({ ...base, title: `Cites ${sectionLabel(target)}`, resolution: "model", question: `Does ${sectionLabel(target)} say what this sentence relies on?`, source: target.text, sourceId: target.id, note: null }, `${target.id}|${sentence}`);
           }
@@ -209,7 +241,7 @@ function referenceChecks(sections: DocSection[], full: DocSection[]): Check[] {
       }
     }
   }
-  return checks;
+  return { checks, omitted };
 }
 
 /**
@@ -222,5 +254,11 @@ export function extractChecks(args: { text: string; fullText?: string; scope: "d
   if (!text?.trim()) return { scope, checks: [], sections: 0 };
   const sections = sectionsOf(text, scope);
   const full = scope === "document" ? sections : splitSections(args.fullText ?? text);
-  return { scope, checks: [...referenceChecks(sections, full), ...termChecks(sections, scope, text)], sections: sections.length };
+  const refs = referenceChecks(sections, full);
+  return {
+    scope,
+    checks: [...refs.checks, ...termChecks(sections, scope, text)],
+    sections: sections.length,
+    ...(refs.omitted > 0 ? { omittedReferences: refs.omitted } : {}),
+  };
 }

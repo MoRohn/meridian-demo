@@ -27,9 +27,18 @@ describe("typesafeOverride / openaiOverride", () => {
     judgeApiKey: "",
   };
 
-  it("returns undefined when no key is set, regardless of the model field", () => {
+  it("returns undefined when no key is set and the model is still the dropdown default", () => {
     expect(typesafeOverride(base)).toBeUndefined();
     expect(openaiOverride(base)).toBeUndefined();
+  });
+
+  it("sends a picked model on its own when no key is saved, so the server's key is used with that model", () => {
+    expect(openaiOverride({ ...base, openaiModel: "gpt-5.1" })).toEqual({ model: "gpt-5.1" });
+    expect(openaiOverride({ ...base, openaiApiKey: "   ", openaiModel: "gpt-5.1" })).toEqual({ model: "gpt-5.1" });
+  });
+
+  it("sends nothing for a blank model with no key", () => {
+    expect(openaiOverride({ ...base, openaiModel: "  " })).toBeUndefined();
   });
 
   it("returns undefined for a whitespace-only key (never sends a blank Authorization header)", () => {

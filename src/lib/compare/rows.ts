@@ -2,9 +2,11 @@ import type { ComplianceFlag } from "../orchestrator/run";
 import type { OpenAIRunOutcome } from "../openai/types";
 import type { Check, Extraction } from "../citations/extract";
 import { emptySide, type CitationRun, type SideRun } from "../citations/store";
+import type { Judged } from "../citations/batch";
 import { RISK_BAND_LABELS, RISK_DIMENSIONS, riskBand, type CompositeRisk, type RiskDimensionId } from "../skills/clauseRisk";
 import { COMPLIANCE_CHECKS } from "../skills/complianceGuard";
 import { openaiAnswerFor } from "./agreement";
+import { impliedYesProbability } from "../trace/cells";
 
 /**
  * The one shape every results tab is drawn from. Trace, Risk, Compliance and Citations all show the same thing: a list of
@@ -42,6 +44,11 @@ export interface CompareRow {
   facts?: string[];
   ts: Cell;
   oa: Cell;
+  /**
+   * The app's own rules decided this item and no model saw it. `ts` then holds the one result, and the table draws it
+   * once across both model columns instead of crediting either model with it.
+   */
+  ruleDecided?: boolean;
   /** Whether the two backends agree; null when there is nothing to compare. */
   match: boolean | null;
 }
@@ -143,6 +150,21 @@ export function riskGroups(risk: CompositeRisk, openai: OpenAIRisk | null, opena
 
 // ---- compliance ---------------------------------------------------------------------------------------------------------
 
+/**
+ * OpenAI's decision on one check, with its bar on TypeSafe's scale (probability the check trips) so the two read side by
+ * side. OpenAI reports a self-reported confidence in its decision, so "Clear, 99% sure" is drawn as a 1% chance of a flag.
+ */
+function oaComplianceCell(flagged: boolean, selfReportedConfidence: number | null): CellData {
+  const probability = impliedYesProbability(flagged, selfReportedConfidence);
+  return {
+    main: flagged ? "Flagged" : "Clear",
+    sub: selfReportedConfidence != null ? `self-reported ${pct(selfReportedConfidence)}` : "no confidence reported",
+    tone: flagged ? "rose" : "emerald",
+    bar: probability == null ? null : { value: probability, tone: flagged ? "rose" : "emerald" },
+    detail: probability == null ? undefined : `Probability of a flag implied by its self-reported confidence: ${pct(probability)}`,
+  };
+}
+
 export function complianceGroups(flags: readonly ComplianceFlag[], outcome: OpenAIRunOutcome | null, openaiConfigured: boolean): CompareGroup[] {
   const rows: CompareRow[] = flags.map((f) => {
     const oa = openaiAnswerFor(outcome, f.id);
@@ -154,7 +176,7 @@ export function complianceGroups(flags: readonly ComplianceFlag[], outcome: Open
       ts: { main: f.flagged ? "Flagged" : "Clear", sub: `${pct(f.probability)} probability`, tone: f.flagged ? "rose" : "emerald", bar: { value: f.probability, tone: f.flagged ? "rose" : "emerald" } },
       oa:
         oa && oaFlagged != null
-          ? { main: oaFlagged ? "Flagged" : "Clear", sub: oa.selfReportedConfidence != null ? `self-reported ${pct(oa.selfReportedConfidence)}` : "no confidence reported", tone: oaFlagged ? "rose" : "emerald" }
+          ? oaComplianceCell(oaFlagged, oa.selfReportedConfidence)
           : notRun(openaiConfigured),
       match: oaFlagged != null ? oaFlagged === f.flagged : null,
     };
@@ -176,13 +198,22 @@ const RULE_LABEL: Record<Exclude<Check["resolution"], "model">, { main: string; 
   missing: { main: "Missing", tone: "amber" },
 };
 
+/**
+ * What one backend judged for a check, or undefined when there is no run yet, the side has not reported, or it reported
+ * nothing for this check. A run can be partial (a side still pending, or a stored run from an older shape), so every read
+ * of a verdict goes through here rather than reaching into `run.<side>.judged` directly.
+ */
+export function judgedOf(run: CitationRun | undefined, side: "typesafe" | "openai", id: string): Judged | undefined {
+  return run?.[side]?.judged?.[id];
+}
+
 /** One backend's cell for a check a model judges: what it said, or the plain words for why it has not. */
 function judgedCell(side: SideRun, check: Check, backend: "typesafe" | "openai", openaiConfigured: boolean): Cell {
   if (backend === "openai" && !openaiConfigured) return "not run";
   if (side.status === "idle" || side.status === "pending") return "checking\u2026";
   if (side.status === "skipped") return side.reason === "not_configured" ? "not run" : "no answer";
   if (side.status === "error") return "call failed";
-  const j = side.judged[check.id];
+  const j = side.judged?.[check.id];
   if (!j) return "no answer";
   const tone = VERDICT_TONE[j.verdict];
   return {
@@ -206,13 +237,18 @@ export function citationRow(check: Check, run: CitationRun | undefined, openaiCo
   };
   if (check.resolution !== "model") {
     const rule = RULE_LABEL[check.resolution];
-    return { ...base, subtitle: check.kind === "reference" ? (check.note ?? undefined) : (check.claim), ts: { main: rule.main, sub: check.note ?? undefined, tone: rule.tone }, oa: "no model needed", match: null };
+    return { ...base, subtitle: check.kind === "reference" ? (check.note ?? undefined) : (check.claim), ts: { main: rule.main, sub: check.note ?? undefined, tone: rule.tone }, oa: "", ruleDecided: true, match: null };
   }
   const ts = judgedCell(run?.typesafe ?? emptySide("pending"), check, "typesafe", true);
   const oa = judgedCell(run?.openai ?? emptySide(openaiConfigured ? "pending" : "skipped"), check, "openai", openaiConfigured);
-  const tsJudged = run?.typesafe.judged[check.id];
-  const oaJudged = run?.openai.judged[check.id];
+  const tsJudged = judgedOf(run, "typesafe", check.id);
+  const oaJudged = judgedOf(run, "openai", check.id);
   return { ...base, ts, oa, match: tsJudged && oaJudged ? tsJudged.verdict === oaJudged.verdict : null };
+}
+
+/** The references group's note: how many were checked, and, when the cap cut some off, how many more were left out. */
+export function referencesNote(checked: number, omitted: number): string {
+  return omitted > 0 ? `${checked} checked, ${omitted} more not checked` : `${checked} found`;
 }
 
 export function citationGroups(extraction: Extraction, run: CitationRun | undefined, openaiConfigured: boolean): CompareGroup[] {
@@ -220,7 +256,7 @@ export function citationGroups(extraction: Extraction, run: CitationRun | undefi
   const refs = rows("reference");
   const terms = rows("term");
   return [
-    ...(refs.length ? [{ id: "references", label: "Cited in the text", note: `${refs.length} found`, rows: refs }] : []),
+    ...(refs.length ? [{ id: "references", label: "Cited in the text", note: referencesNote(refs.length, extraction.omittedReferences ?? 0), rows: refs }] : []),
     ...(terms.length ? [{ id: "terms", label: "Key terms", note: "checked against the playbook", rows: terms }] : []),
   ];
 }
@@ -248,8 +284,8 @@ export function summarizeCitations(extraction: Extraction, run: CitationRun | un
     else if (c.resolution === "missing") out.missing += 1;
     else if (c.resolution === "external") out.notCheckable += 1;
     else {
-      const ts = run?.typesafe.judged[c.id];
-      const oa = run?.openai.judged[c.id];
+      const ts = judgedOf(run, "typesafe", c.id);
+      const oa = judgedOf(run, "openai", c.id);
       if (!ts) out.pending += 1;
       else if (ts.verdict === "verified") out.supported += 1;
       else if (ts.verdict === "contradicted") out.contradicted += 1;
@@ -267,7 +303,7 @@ export function summarizeCitations(extraction: Extraction, run: CitationRun | un
 export function mostConsequential(extraction: Extraction, run: CitationRun | undefined): string | null {
   const order: Verdict[] = ["contradicted", "unsupported", "verified"];
   for (const verdict of order) {
-    const hit = extraction.checks.find((c) => c.resolution === "model" && run?.typesafe.judged[c.id]?.verdict === verdict);
+    const hit = extraction.checks.find((c) => c.resolution === "model" && judgedOf(run, "typesafe", c.id)?.verdict === verdict);
     if (hit) return hit.id;
   }
   return null;
@@ -279,14 +315,14 @@ export type CitationFilter = "all" | "attention" | "disagree";
 export function needsAttention(check: Check, run: CitationRun | undefined): boolean {
   if (check.resolution === "broken" || check.resolution === "missing") return true;
   if (check.resolution !== "model") return false;
-  const verdict = run?.typesafe.judged[check.id]?.verdict;
+  const verdict = judgedOf(run, "typesafe", check.id)?.verdict;
   return verdict === "contradicted" || verdict === "unsupported";
 }
 
 /** Whether both models answered a check and gave different verdicts. */
 export function modelsDisagree(check: Check, run: CitationRun | undefined): boolean {
-  const ts = run?.typesafe.judged[check.id];
-  const oa = run?.openai.judged[check.id];
+  const ts = judgedOf(run, "typesafe", check.id);
+  const oa = judgedOf(run, "openai", check.id);
   return Boolean(ts && oa && ts.verdict !== oa.verdict);
 }
 

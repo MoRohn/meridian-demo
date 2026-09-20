@@ -7,6 +7,7 @@ this, so the suite always exercises exactly the judge configuration production
 uses; the two cannot drift apart.
 """
 
+import logging
 import math
 import os
 
@@ -18,7 +19,29 @@ from deepeval.test_case import LLMTestCase, SingleTurnParams
 import guard
 from rubrics import Rubric
 
-JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "gpt-4o-mini")
+log = logging.getLogger("meridian.eval")
+
+
+def env_number(name: str, default: float, low: float, high: float, cast=float):
+    """
+    A numeric setting from the environment. A value that is missing, blank, not a number, or outside low..high falls back to
+    the default with a warning, so a typo in a .env file can never stop the service from importing (and so from starting).
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return cast(default)
+    try:
+        value = cast(raw)
+    except ValueError:
+        log.warning("%s=%r is not a number; using the default %s.", name, raw, default)
+        return cast(default)
+    if not math.isfinite(value) or not low <= value <= high:
+        log.warning("%s=%r is outside %s..%s; using the default %s.", name, raw, low, high, default)
+        return cast(default)
+    return value
+
+
+JUDGE_MODEL = os.environ.get("EVAL_JUDGE_MODEL", "").strip() or "gpt-4o-mini"
 
 # Who can judge. The default is OpenAI (the key already saved for the app); Claude and Gemini are there because a judge is
 # fairest when it is made by a different company than the model whose answer it is scoring. Each provider's own key comes
@@ -27,8 +50,8 @@ PROVIDERS = ("openai", "anthropic", "gemini")
 PROVIDER_LABELS = {"openai": "OpenAI", "anthropic": "Claude", "gemini": "Gemini"}
 DEFAULT_MODELS = {
     "openai": JUDGE_MODEL,
-    "anthropic": os.environ.get("EVAL_ANTHROPIC_JUDGE_MODEL", "claude-sonnet-5"),
-    "gemini": os.environ.get("EVAL_GEMINI_JUDGE_MODEL", "gemini-2.5-flash"),
+    "anthropic": os.environ.get("EVAL_ANTHROPIC_JUDGE_MODEL", "").strip() or "claude-sonnet-5",
+    "gemini": os.environ.get("EVAL_GEMINI_JUDGE_MODEL", "").strip() or "gemini-2.5-flash",
 }
 ENV_KEYS = {"openai": ("OPENAI_API_KEY",), "anthropic": ("ANTHROPIC_API_KEY",), "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
 
@@ -62,13 +85,16 @@ def make_judge_model(provider: str, model: str, api_key: str):
 
         return GeminiModel(model=model, api_key=api_key, temperature=0)
     return OpenAIModel(model=model, api_key=api_key, temperature=0)
-PASS_THRESHOLD = float(os.environ.get("EVAL_PASS_THRESHOLD", "0.6"))
+
+
+# The score, as a fraction, at or above which an answer passes.
+PASS_THRESHOLD: float = env_number("EVAL_PASS_THRESHOLD", 0.6, 0.0, 1.0)
 # How many candidate score tokens G-Eval averages over. DeepEval defaults to 20 and returns a probability-weighted
 # average, which can carry a verdict across a band boundary: a judge whose top choice is 6 (a pass) but who is unsure
 # can average to 5.2 and fail, and one whose top choice is 5 (a fail) with mass on 7-8 can average to 6.4 and pass,
 # leaving the shown score at odds with the judge's own written reason. With 1 the score IS the judge's chosen integer,
 # so the verdict always matches the band it chose. Set EVAL_TOP_LOGPROBS=20 to restore averaging and compare on the golden set.
-TOP_LOGPROBS = int(os.environ.get("EVAL_TOP_LOGPROBS", "1"))
+TOP_LOGPROBS: int = env_number("EVAL_TOP_LOGPROBS", 1, 1, 20, cast=int)
 
 
 # ---- the verdict: one rule for every judge, provider and backend --------------------------------------------------------

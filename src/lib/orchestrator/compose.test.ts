@@ -135,3 +135,22 @@ describe("composeTurn: one pipeline for both backends", () => {
     for (const id of ["intent", "urgency", "liability_exposure", "auto_renewal_trap", "contract_type"]) expect(r.used.has(id), id).toBe(true);
   });
 });
+
+describe("composeTurn: an answer the backend did not return", () => {
+  it("asks how to route instead of crashing when the intent is missing (OpenAI can omit a field)", () => {
+    const noIntent = analyzeAnswers();
+    delete noIntent.intent;
+    const r = composeTurn(withDoc(), noIntent);
+    expect(r.reply).toContain("are you looking to (1) analyze");
+    expect(r.intent).toBeNull();
+    expect(r.risk).toBeNull();
+  });
+
+  it("still analyzes when only the urgency is missing, and does not call it urgent", () => {
+    const noUrgency = analyzeAnswers();
+    delete noUrgency.urgency;
+    const r = composeTurn(withDoc(), noUrgency);
+    expect(r.risk).not.toBeNull();
+    expect(r.reply).not.toContain("time-sensitive");
+  });
+});

@@ -6,7 +6,9 @@
  * URL once it's set up (falling back to localhost with clear one-time setup
  * instructions until it is), and the browser opened for you automatically.
  */
+import "./load-env.mjs";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import net from "node:net";
 import dns from "node:dns/promises";
 import { isPortFree as isServicePortFree, isSetUp as evalServiceIsSetUp, SERVICE_PORT, startEvalService } from "./eval-service.mjs";
@@ -93,6 +95,10 @@ async function main() {
   }
 
   console.log(`  Starting on ${url} ...`);
+
+  // The app and the evaluation service it starts share a secret, so nothing else that can reach the service's port can spend
+  // its judge credits. A token set in the environment or .env.local is used as it is.
+  if (!process.env.EVAL_SERVICE_TOKEN?.trim()) process.env.EVAL_SERVICE_TOKEN = randomBytes(24).toString("hex");
 
   // Bind on all interfaces (Next's default) so it answers to localhost,
   // 127.0.0.1, AND meridian.local alike only the URL we print/open differs.

@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { formatElapsed, type ActivityFinish, type ActivityKind } from "@/lib/activity/log";
-import { citationGroups, filterExtraction, mostConsequential, modelsDisagree, needsAttention, summarizeCitations, VERDICT_LABEL, type CitationFilter } from "@/lib/compare/rows";
+import { citationGroups, filterExtraction, judgedOf, mostConsequential, modelsDisagree, needsAttention, summarizeCitations, VERDICT_LABEL, type CitationFilter } from "@/lib/compare/rows";
 import { openaiCostUsd } from "@/lib/compare/openaiEquivalent";
 import { fmtUsd, typesafeCostUsd } from "@/lib/compare/pricing";
 import { RELATION_LABELS } from "@/lib/citations/batch";
-import { extractChecks } from "@/lib/citations/extract";
+import { MAX_REFERENCES, extractChecks } from "@/lib/citations/extract";
 import { startRun, type RunDeps } from "@/lib/citations/run";
 import { citationSig, citationStore, hash, type SideRun } from "@/lib/citations/store";
 import { buildCitationPacket } from "@/lib/eval/packets";
@@ -56,6 +56,11 @@ function ModelRun({ name, side, onRetry, retryDisabled }: { name: string; side: 
           {name} <span className={`font-medium ${status === "error" ? "text-rose-800" : "text-muted"}`}>{state}</span>
         </p>
         {detail && <p className={`break-words ${status === "error" ? "text-rose-900" : "text-muted"}`}>{detail}</p>}
+        {status === "done" && side?.fallbackFrom && (
+          <p className="mt-0.5 break-words font-semibold text-amber-800">
+            Requested <code className="font-mono">{side.fallbackFrom}</code> wasn&rsquo;t available on this key, so <code className="font-mono">{side.model}</code> judged these.
+          </p>
+        )}
       </div>
       {status === "error" && (
         <button
@@ -163,7 +168,7 @@ export function CitationVerifier({
   const [chosen, setChosen] = useState<string | null>(null);
   const [filter, setFilter] = useState<CitationFilter>("all");
   const summary = summarizeCitations(extraction, run);
-  const judgeable = extraction.checks.filter((c) => c.resolution === "model" && run?.typesafe.judged[c.id]);
+  const judgeable = extraction.checks.filter((c) => c.resolution === "model" && judgedOf(run, "typesafe", c.id));
   const judgedId = judgeable.some((c) => c.id === chosen) ? chosen : mostConsequential(extraction, run);
   const judged = judgeable.find((c) => c.id === judgedId);
 
@@ -217,7 +222,7 @@ export function CitationVerifier({
     <div ref={sectionRef} className="space-y-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1 basis-56">
-          <EvalSummaryBar icon="search" headline={extraction.checks.length ? `${extraction.checks.length} checks` : "Nothing to check"} stats={stats} />
+          <EvalSummaryBar icon="search" headline={extraction.checks.length ? `${extraction.checks.length} check${extraction.checks.length === 1 ? "" : "s"}` : "Nothing to check"} stats={stats} />
         </div>
         {extraction.checks.length > 0 && <RerunButton onClick={recheck} pending={Boolean(running)} label="Re-check" title="Read the text again, ask both models, and have the judge score afresh" />}
       </div>
@@ -265,6 +270,11 @@ export function CitationVerifier({
       ) : (
         <ComparisonTable groups={groups} label="Citation checks" firstColumn="Check" />
       )}
+      {active === "all" && (extraction.omittedReferences ?? 0) > 0 && (
+        <p className="text-xs text-muted" role="note">
+          This text cites more than the {MAX_REFERENCES} references checked here: {extraction.omittedReferences} more {extraction.omittedReferences === 1 ? "was" : "were"} left out. Highlight a section to check the rest.
+        </p>
+      )}
       {active === "all" && groups.length > 0 && refCount === 0 && <p className="text-xs text-muted">No references or citations are written in this text, so only its key terms were checked.</p>}
 
       {judgeable.length > 0 && judged && (
@@ -293,7 +303,7 @@ export function CitationVerifier({
             openaiPacket={packet("openai")}
             openaiConfigured={openaiConfigured}
             openaiEmptyReason={
-              run?.openai.judged[judged.id] || run?.openai.status === "pending"
+              judgedOf(run, "openai", judged.id) || run?.openai?.status === "pending"
                 ? undefined
                 : noOpenAIAnswerReason(run?.openai.status === "error" ? { ok: false, reason: "error", message: run.openai.message } : null, "the relation answer")
             }

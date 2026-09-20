@@ -1,4 +1,5 @@
 import type { EvalKind, EvalOutcome } from "./types";
+import type { ResponseMetrics } from "./response";
 
 /**
  * Session-level memory for evaluations, outside React. The tab content remounts whenever a tab is switched, so results
@@ -30,6 +31,8 @@ export interface StoredEvaluation {
   kind?: EvalKind;
   /** The request and answer the judge scored. */
   packet?: EvaluatedPacket;
+  /** How long the answering model took to produce that answer, and what it cost (not the judge's figures). See response.ts. */
+  response?: ResponseMetrics | null;
 }
 
 export interface StoredEvaluationRow extends StoredEvaluation {

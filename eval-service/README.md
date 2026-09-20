@@ -35,8 +35,14 @@ With the service down, the Evaluate panel reports "evaluation service unavailabl
 |---|---|---|
 | `OPENAI_API_KEY` | see below | The judge model's key. Not needed if the request carries one. |
 | `EVAL_JUDGE_MODEL` | `gpt-4o-mini` | Which model judges. Any DeepEval-supported chat model. |
-| `EVAL_PASS_THRESHOLD` | `0.6` | Score at or above which an answer passes. |
-| `EVAL_TOP_LOGPROBS` | `1` | How many candidate score tokens G-Eval averages over. See "Why `top_logprobs=1`" below. |
+| `EVAL_PASS_THRESHOLD` | `0.6` | Score at or above which an answer passes, from 0 to 1. |
+| `EVAL_TOP_LOGPROBS` | `1` | How many candidate score tokens G-Eval averages over, from 1 to 20. See "Why `top_logprobs=1`" below. |
+| `EVAL_JUDGE_TIMEOUT_S` | `45` | How long one judge call may take before `/evaluate` answers 504 `judge_timeout`. Keep it under the 60s Meridian waits. |
+| `EVAL_MAX_CONCURRENT` | `8` | How many judge calls may run at once; the rest wait, and give up at the deadline. |
+| `EVAL_SERVICE_TOKEN` | unset | When set, `/evaluate` and `/stats` require it in the `X-Eval-Token` header (Meridian's server sends it). Leave it unset only when the service is on loopback or a private network. |
+
+A setting that is blank, not a number, or outside its range is ignored with a warning in the log and the default is used, so a
+typo in `.env` cannot stop the service from starting.
 | `EVAL_GENERATOR_MODEL` | `gpt-4o` | Writes source text for synthetic goldens (`golden/synth.py`). |
 | `EVAL_LABELER_MODEL` | generator | Blind re-labeler that must independently agree with the generator's spec. |
 

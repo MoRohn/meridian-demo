@@ -7,6 +7,15 @@ export const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-6-astra";
 /** Long-established, universally-available model — the safety net when a newer/rolling-out model (like the flagship default above) 404s or 400s for an account that doesn't have it yet, or rejects a request shape it doesn't support. */
 export const FALLBACK_MODEL = "gpt-4o-mini";
 export const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+/** How long any one OpenAI call may run before it is abandoned, so a stalled connection cannot hold a request open. */
+export const OPENAI_TIMEOUT_MS = 60_000;
+
+/** The plain-words error for a failed OpenAI fetch: a timeout says so instead of surfacing the runtime's "The operation was aborted". */
+export function describeFetchError(err: unknown): string {
+  const e = err as Error | undefined;
+  if (e?.name === "TimeoutError" || e?.name === "AbortError") return `OpenAI did not answer within ${OPENAI_TIMEOUT_MS / 1000}s`;
+  return e?.message || "OpenAI request failed";
+}
 
 /**
  * Reasoning-family models (o-series, gpt-5+) default to spending reasoning
@@ -79,6 +88,7 @@ async function attemptCall(
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
     });
 
     const elapsedMs = Math.round(performance.now() - started);
@@ -119,7 +129,7 @@ async function attemptCall(
       },
     };
   } catch (err) {
-    return { ok: false, status: null, message: (err as Error).message };
+    return { ok: false, status: null, message: describeFetchError(err) };
   }
 }
 

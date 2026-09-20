@@ -7,6 +7,7 @@ import { composeTurn } from "@/lib/orchestrator/compose";
 import { writeReply } from "@/lib/chat/answer";
 import type { OpenAITurn } from "@/lib/openai/types";
 import type { KeyOverride } from "@/lib/typesafe/client";
+import { MAX_MESSAGE_CHARS, apiError, guardApi, isValidSessionId } from "@/lib/api/guard";
 
 export const runtime = "nodejs";
 
@@ -20,11 +21,14 @@ export const runtime = "nodejs";
  * actually owns and advances the conversation.
  */
 export async function POST(req: NextRequest) {
+  const blocked = guardApi(req);
+  if (blocked) return blocked;
   try {
     const body = (await req.json()) as { sessionId?: string; message?: string; override?: KeyOverride };
-    if (!body?.sessionId || !body?.message?.trim()) {
-      return NextResponse.json({ error: "sessionId and message are required" }, { status: 400 });
+    if (!isValidSessionId(body?.sessionId) || typeof body?.message !== "string" || !body.message.trim()) {
+      return apiError("a valid sessionId and a message are required", 400);
     }
+    if (body.message.length > MAX_MESSAGE_CHARS) return apiError(`message is too long (max ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters)`, 413);
 
     const session = getOrCreateSession(body.sessionId);
     // Snapshot BEFORE awaiting: the chat request races this one and appends to the history when it finishes, and this
@@ -52,6 +56,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("[api/compare-openai] error:", err);
-    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+    return apiError("Internal error", 500);
   }
 }

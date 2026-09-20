@@ -8,6 +8,7 @@ import { describeIntegrity } from "@/lib/eval/integrity";
 import { shouldAutoEvaluate } from "@/lib/eval/auto";
 import { savedJudgeKey } from "@/lib/eval/client";
 import { evalStore, type Backend, type StoredEvaluation } from "@/lib/eval/store";
+import { responseFor, type ResponseMetrics } from "@/lib/eval/response";
 import { autoEvaluateEnabled, describeJudge, loadSettings } from "@/lib/settings";
 import { useIsRendered } from "@/lib/useIsRendered";
 import { renderBold } from "@/lib/renderBold";
@@ -148,7 +149,7 @@ function viewOf(side: Side, stored: StoredEvaluation | undefined, sig: string, s
 }
 
 /**
- * The evaluation layout, the same on every tab: one row per model in a single table (score, result, judge time and cost), the judge's verdict on the
+ * The evaluation layout, the same on every tab: one row per model in a single table (the judge's score and result, then that model's own response time and cost), the judge's verdict on the
  * line beneath, and everything longer (what the judge saw, bands, steps) in one disclosure below. It says the same things as
  * the full cards, in a fraction of the space.
  */
@@ -165,14 +166,14 @@ function CompactSides({ sides, stored, sigOf, serviceDown }: { sides: Side[]; st
               <th scope="col" className="px-2.5 py-1.5">Model</th>
               <th scope="col" className="px-2 py-1.5">Score</th>
               <th scope="col" className="px-2 py-1.5">Result</th>
-              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Judge time</th>
-              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Judge cost</th>
+              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Resp. time</th>
+              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Resp. cost</th>
             </tr>
           </thead>
           {views.map(({ side, view }) => (
             <tbody key={side.backend} aria-label={`${side.name} evaluation`} className="border-t border-border/60 first:border-t-0">
               {view.kind === "result" ? (
-                <CompactResultRows name={side.name} result={view.result} />
+                <CompactResultRows name={side.name} result={view.result} response={stored[side.backend]?.response} />
               ) : (
                 <tr>
                   <th scope="row" className="px-2.5 py-2 text-left align-top font-bold text-foreground">{side.name}</th>
@@ -217,7 +218,7 @@ function CompactSides({ sides, stored, sigOf, serviceDown }: { sides: Side[]; st
   );
 }
 
-function CompactResultRows({ name, result }: { name: string; result: EvalResult }) {
+function CompactResultRows({ name, result, response }: { name: string; result: EvalResult; response: ResponseMetrics | null | undefined }) {
   const t = TONE[scoreTone(result.score, result.threshold)];
   const integrity = describeIntegrity(result);
   const score = Math.round(result.score * 100);
@@ -247,8 +248,8 @@ function CompactResultRows({ name, result }: { name: string; result: EvalResult 
           </span>
           <span className="mt-0.5 block text-[11px] text-muted">at {Math.round(result.threshold * 100)}%</span>
         </td>
-        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{formatElapsed(result.latencyMs)}</td>
-        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{result.judgeCostUsd != null ? fmtUsd(result.judgeCostUsd) : "n/a"}</td>
+        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{response?.ms != null ? formatElapsed(response.ms) : "n/a"}</td>
+        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{response?.costUsd != null ? fmtUsd(response.costUsd) : "n/a"}</td>
       </tr>
       <tr>
         <td colSpan={5} className="px-2.5 pb-2 pt-1 leading-relaxed text-secondary">
@@ -364,11 +365,15 @@ export function EvaluationPanel({
         contextChars: packet.context?.length ?? 0,
         context: packet.context && packet.context.length <= SHORT_SOURCE_CHARS ? packet.context : undefined,
       };
-      evalStore.set(scope, side.backend, { sig, outcome: null, pending: true, auto, kind, packet: snapshot });
+      // How long the answering model took and what it cost is read once, when this answer is first judged, and kept across
+      // re-evaluations of the same answer, so a later chat turn cannot change what an earlier answer is reported as having cost.
+      const before = evalStore.get(scope, side.backend);
+      const response = before && before.sig === sig && before.response !== undefined ? before.response : responseFor(activityLog.list(), scope, kind, side.backend);
+      evalStore.set(scope, side.backend, { sig, outcome: null, pending: true, auto, kind, packet: snapshot, response });
       // Each judge call is its own activity with its own timer, so it starts from zero whatever else is running.
       const activityId = activityLog.begin("judge", "evaluation", `${copy.title}: ${side.name}`);
       runEvaluation({ kind, backend: side.backend, input: packet.input, actualOutput: packet.actualOutput, context: packet.context }).then((outcome) => {
-        evalStore.set(scope, side.backend, { sig, outcome, pending: false, auto, kind, packet: snapshot });
+        evalStore.set(scope, side.backend, { sig, outcome, pending: false, auto, kind, packet: snapshot, response });
         activityLog.finish(
           activityId,
           outcome.ok

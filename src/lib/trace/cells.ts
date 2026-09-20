@@ -15,6 +15,23 @@ export interface AnswerCell {
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+
+/** How a probability of yes is toned: a likely yes is a problem (rose), a likely no is fine (emerald), in between is amber. */
+export function yesTone(probabilityOfYes: number): "rose" | "amber" | "emerald" {
+  return probabilityOfYes >= 0.6 ? "rose" : probabilityOfYes <= 0.4 ? "emerald" : "amber";
+}
+
+/**
+ * The probability of "yes" that OpenAI's answer implies, so its bar sits on the same scale as TypeSafe's. OpenAI returns a
+ * boolean and a self-reported confidence in that answer: "No, 99% sure" implies a 1% chance of yes. It is a reading of a
+ * self-reported number, not a calibrated probability, and the cell's label says so. Null when no confidence was reported.
+ */
+export function impliedYesProbability(yes: boolean, selfReportedConfidence: number | null): number | null {
+  if (selfReportedConfidence == null) return null;
+  const confidence = clamp01(selfReportedConfidence);
+  return yes ? confidence : 1 - confidence;
+}
 
 /** The highest level a score question can take, from its legend, falling back to the highest level it gave any probability. */
 export function scoreCeiling(answer: Extract<Answer, { type: "score" }>): number {
@@ -28,7 +45,7 @@ export function typesafeCell(answer: Answer): AnswerCell {
     return {
       main: yes ? "Yes" : "No",
       sub: `${pct(answer.noul)} probability of yes`,
-      bar: { value: answer.noul, tone: answer.noul >= 0.6 ? "rose" : answer.noul <= 0.4 ? "emerald" : "amber" },
+      bar: { value: answer.noul, tone: yesTone(answer.noul) },
       detail: `Probability of yes: ${pct(answer.noul)}`,
     };
   }
@@ -52,8 +69,37 @@ export function typesafeCell(answer: Answer): AnswerCell {
   };
 }
 
-/** OpenAI's answer to the same question, in the same voice: a yes/no reads Yes/No rather than true/false. */
-export function openaiCell(answer: Answer, value: string | number | boolean, selfReportedConfidence: number | null): { main: string; sub: string } {
-  const main = answer.type === "noul" ? (Boolean(value) ? "Yes" : "No") : String(value);
-  return { main, sub: selfReportedConfidence != null ? `self-reported ${pct(selfReportedConfidence)}` : "" };
+/**
+ * OpenAI's answer to the same question, in the same voice: a yes/no reads Yes/No rather than true/false, and the bar is
+ * drawn on the scale TypeSafe's is (probability of yes; confidence in the chosen option; level out of the top level), so
+ * the two can be read side by side. Only the confidence figures are self-reported, and the label says so.
+ */
+export function openaiCell(answer: Answer, value: string | number | boolean, selfReportedConfidence: number | null): AnswerCell {
+  const sub = selfReportedConfidence != null ? `self-reported ${pct(selfReportedConfidence)}` : "";
+  if (answer.type === "noul") {
+    const yes = Boolean(value);
+    const probability = impliedYesProbability(yes, selfReportedConfidence);
+    return {
+      main: yes ? "Yes" : "No",
+      sub,
+      bar: probability == null ? null : { value: probability, tone: yesTone(probability) },
+      detail: probability == null ? "OpenAI reported no confidence" : `Probability of yes implied by its self-reported confidence: ${pct(probability)}`,
+    };
+  }
+  if (answer.type === "choice") {
+    return {
+      main: String(value),
+      sub,
+      bar: selfReportedConfidence == null ? null : { value: clamp01(selfReportedConfidence), tone: "accent" },
+      detail: selfReportedConfidence == null ? "OpenAI reported no confidence" : `Self-reported confidence in its choice: ${pct(selfReportedConfidence)}`,
+    };
+  }
+  const top = scoreCeiling(answer);
+  const level = Number(value);
+  return {
+    main: String(value),
+    sub,
+    bar: Number.isFinite(level) ? { value: clamp01(level / top), tone: "amber" } : null,
+    detail: `Level ${String(value)} of ${top}${selfReportedConfidence != null ? `, self-reported confidence ${pct(selfReportedConfidence)}` : ""}`,
+  };
 }

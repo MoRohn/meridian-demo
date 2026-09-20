@@ -6,7 +6,7 @@ import { extractChecks } from "../citations/extract";
 import { emptySide, type CitationRun } from "../citations/store";
 import type { Judged } from "../citations/batch";
 import type { CompositeRisk } from "../skills/clauseRisk";
-import { citationGroups, citationRow, filterExtraction, modelsDisagree, mostConsequential, needsAttention, summarizeCitations, complianceGroups, computeOpenAIRisk, dimensionTone, drivingFactor, openaiRatings, overallTone, riskGroups, type Cell, type CellData } from "./rows";
+import { citationGroups, citationRow, filterExtraction, judgedOf, referencesNote, modelsDisagree, mostConsequential, needsAttention, summarizeCitations, complianceGroups, computeOpenAIRisk, dimensionTone, drivingFactor, openaiRatings, overallTone, riskGroups, type Cell, type CellData } from "./rows";
 
 const ok = (answers: Record<string, { value: string | number | boolean; selfReportedConfidence: number | null }>): OpenAIRunOutcome => ({
   ok: true, result: { model: "gpt-4o", answers, usage: { input_tokens: 2100, output_tokens: 610 }, elapsedMs: 6400, source: "live", requestBytes: 1 },
@@ -98,6 +98,18 @@ describe("complianceGroups", () => {
     expect(data(renewal.oa)).toMatchObject({ main: "Flagged", sub: "self-reported 99%", tone: "rose" });
     expect(renewal.subtitle).toMatch(/renew/i); // the check's own definition
   });
+  it("gives OpenAI a bar on the same scale as TypeSafe's: the probability of a flag its confidence implies", () => {
+    const [renewal] = groups[0].rows;
+    expect(data(renewal.oa).bar).toEqual({ value: 0.99, tone: "rose" }); // flagged, 99% sure
+    const clear = complianceGroups(flags, ok({ auto_renewal_trap: a(false, 0.99) }), true)[0].rows[0];
+    expect(data(clear.oa)).toMatchObject({ main: "Clear", tone: "emerald" });
+    expect(data(clear.oa).bar?.value).toBeCloseTo(0.01, 10); // clear, 99% sure: a 1% chance of a flag
+    expect(data(clear.oa).bar?.tone).toBe("emerald");
+  });
+  it("draws no OpenAI bar when it reported no confidence", () => {
+    const row = complianceGroups(flags, ok({ auto_renewal_trap: a(true, null) }), true)[0].rows[0];
+    expect(data(row.oa)).toMatchObject({ main: "Flagged", sub: "no confidence reported", bar: null });
+  });
   it("marks agreement by decision, and leaves a question OpenAI did not answer uncompared", () => {
     const [renewal, liability, law] = groups[0].rows;
     expect(renewal.match).toBe(true);
@@ -160,7 +172,7 @@ describe("citation rows", () => {
   it("shows a rule-decided finding as such, with no model column to fill: a missing term", () => {
     const r = row(saas, "term_governing_law", runOf(saas, {}, {}));
     expect(r.ts).toMatchObject({ main: "Missing", tone: "amber", sub: "No clause on this was found in the document." });
-    expect(r.oa).toBe("no model needed");
+    expect(r.ruleDecided).toBe(true); // one result for both columns: neither model is credited with it, or told it was not needed
     expect(r.match).toBeNull();
     expect(r.evidence).toBeUndefined();
   });
@@ -238,5 +250,30 @@ describe("filtering to what matters", () => {
   it("counts only what is shown in each group's note", () => {
     const [group] = citationGroups(filterExtraction(saas, run, "disagree"), run, true);
     expect(group.rows).toHaveLength(1);
+  });
+});
+
+describe("referencesNote", () => {
+  it("counts what was found, and says so when the cap left references unchecked", () => {
+    expect(referencesNote(5, 0)).toBe("5 found");
+    expect(referencesNote(12, 8)).toBe("12 checked, 8 more not checked");
+  });
+});
+
+describe("judgedOf with a partial run", () => {
+  const judged = { verdict: "verified", confidence: 0.9, basis: "calibrated" } as never;
+  it("never throws when the run, a side, or its judged map is missing", () => {
+    expect(judgedOf(undefined, "typesafe", "a")).toBeUndefined();
+    expect(judgedOf({ sig: "s" } as never, "typesafe", "a")).toBeUndefined();
+    expect(judgedOf({ sig: "s", typesafe: { status: "pending" } } as never, "typesafe", "a")).toBeUndefined();
+    expect(judgedOf({ sig: "s", typesafe: { status: "done", judged: { a: judged } } } as never, "typesafe", "a")).toBe(judged);
+  });
+  it("lets the summaries and filters run over a run that has no sides yet", () => {
+    const extraction = { scope: "document", sections: 1, checks: [{ id: "a", kind: "term", resolution: "model" }] } as never;
+    const half = { sig: "s", extraction, tokens: { typesafe: 1, openai: 1 } } as never;
+    expect(summarizeCitations(extraction, half).pending).toBe(1);
+    expect(mostConsequential(extraction, half)).toBeNull();
+    expect(needsAttention((extraction as { checks: never[] }).checks[0], half)).toBe(false);
+    expect(modelsDisagree((extraction as { checks: never[] }).checks[0], half)).toBe(false);
   });
 });

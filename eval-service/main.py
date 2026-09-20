@@ -29,6 +29,8 @@ Run locally:
     uvicorn main:app --port 8008 --reload
 """
 
+import concurrent.futures
+import hmac
 import logging
 import math
 import os
@@ -41,7 +43,7 @@ from typing import Literal
 # default; switch it off before the library is imported.
 os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "1")  # the value DeepEval documents
 
-from fastapi import FastAPI, Header, HTTPException  # noqa: E402
+from fastapi import Depends, FastAPI, Header, HTTPException  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
@@ -76,6 +78,28 @@ if os.environ.get("CONFIDENT_API_KEY"):
 
 JUDGE_MODEL = judge.JUDGE_MODEL
 PASS_THRESHOLD = judge.PASS_THRESHOLD
+
+# One judge call is a paid request to a model provider, and a provider that stalls would otherwise hold a worker thread
+# for as long as it likes. Each call gets a deadline (shorter than the 60s Meridian itself waits, so this service is the
+# one to answer "too slow"), and only a fixed number may be in flight, so a burst of hung calls cannot exhaust the process.
+JUDGE_TIMEOUT_S: float = judge.env_number("EVAL_JUDGE_TIMEOUT_S", 45, 1, 600)
+MAX_CONCURRENT_JUDGES: int = judge.env_number("EVAL_MAX_CONCURRENT", 8, 1, 64, cast=int)
+_judge_pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JUDGES, thread_name_prefix="judge")
+
+# Optional shared secret. When EVAL_SERVICE_TOKEN is set, /evaluate and /stats require it in the X-Eval-Token header
+# (Meridian's server sends it; `npm run meridian` generates one for the pair it starts). Without it the service trusts its
+# network position, so it must only listen on loopback or a private network.
+SERVICE_TOKEN = os.environ.get("EVAL_SERVICE_TOKEN", "").strip()
+if not SERVICE_TOKEN:
+    log.info("EVAL_SERVICE_TOKEN is not set: /evaluate accepts any caller that can reach this port. Keep it on loopback or a private network.")
+
+
+def require_token(x_eval_token: str | None = Header(default=None)) -> None:
+    """Rejects a caller that does not present the service token, when one is configured. Compared in constant time."""
+    if not SERVICE_TOKEN:
+        return
+    if not hmac.compare_digest((x_eval_token or "").encode(), SERVICE_TOKEN.encode()):
+        raise HTTPException(status_code=401, detail="Missing or invalid evaluation service token. Set the same EVAL_SERVICE_TOKEN for Meridian and the service.")
 
 # Meridian caps uploaded documents at 100k characters (src/app/api/extract/route.ts);
 # anything much larger than that here is a bug upstream, not a real contract, and
@@ -164,13 +188,15 @@ def health():
         "providers": {p: {"default_model": judge.DEFAULT_MODELS[p], "env_key": judge.env_key(p) is not None} for p in judge.PROVIDERS},
         "pass_threshold": PASS_THRESHOLD,
         "top_logprobs": judge.TOP_LOGPROBS,
+        "judge_timeout_s": JUDGE_TIMEOUT_S,
+        "auth_required": bool(SERVICE_TOKEN),
         "telemetry_opt_out": os.environ.get("DEEPEVAL_TELEMETRY_OPT_OUT", "").upper() in ("YES", "1", "TRUE"),
         "confident_ai_configured": bool(os.environ.get("CONFIDENT_API_KEY")),
         "rubrics": {k: r.version for k, r in RUBRICS.items()},
     }
 
 
-@app.get("/stats")
+@app.get("/stats", dependencies=[Depends(require_token)])
 def stats():
     with _stats_lock:
         total = _stats["evaluations_ok"] + _stats["evaluations_failed"]
@@ -201,7 +227,25 @@ _KEY_FORMAT = re.compile(r"^[\x21-\x7e]{16,300}$")  # printable ASCII, no whites
 _MODEL_FORMAT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
 
 
-@app.post("/evaluate", response_model=EvaluateResponse)
+class JudgeTimeout(Exception):
+    """The judge call did not finish within JUDGE_TIMEOUT_S."""
+
+
+def _measure_within_deadline(metric, test_case) -> None:
+    """
+    Runs `metric.measure` on the bounded judge pool and gives up after JUDGE_TIMEOUT_S. A thread cannot be killed, so a call
+    that has already started keeps running until its provider answers or its own client gives up; the pool size is what
+    bounds how many can pile up. A call still waiting for a free thread is cancelled outright.
+    """
+    future = _judge_pool.submit(metric.measure, test_case)
+    try:
+        future.result(timeout=JUDGE_TIMEOUT_S)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        raise JudgeTimeout from None
+
+
+@app.post("/evaluate", response_model=EvaluateResponse, dependencies=[Depends(require_token)])
 def evaluate(
     req: EvaluateRequest,
     x_judge_api_key: str | None = Header(default=None),
@@ -240,7 +284,15 @@ def evaluate(
     started = time.perf_counter()
     try:
         with judge_errors.holding(request_key):
-            metric.measure(test_case)
+            _measure_within_deadline(metric, test_case)
+    except JudgeTimeout:
+        latency = int((time.perf_counter() - started) * 1000)
+        _record(req.kind, False, latency, error="judge_timeout")
+        log.warning("eval_failed kind=%s backend=%s judge=%s latency_ms=%d error=judge_timeout", req.kind, req.backend, judge_model, latency)
+        raise HTTPException(
+            status_code=504,
+            detail=f"G-Eval judge call failed (judge_timeout): The judge model didn't answer within {JUDGE_TIMEOUT_S:g}s. Try again, or set EVAL_JUDGE_MODEL to a faster model.",
+        ) from None
     except Exception as exc:  # noqa: BLE001 - every judge failure is reported, with a stable code
         latency = int((time.perf_counter() - started) * 1000)
         code, message = judge_errors.explain(exc, secrets=(request_key,) if request_key else ())

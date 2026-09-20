@@ -80,7 +80,7 @@ check(scoredBlocks.every((b) => b.tenths === Math.round(b.score / 10)), "every s
 
 if (rows) {
   const header = rows[0];
-  check(header?.length === 14, "the data table has 14 columns", String(header?.length));
+  check(header?.length === 13, "the data table has 13 columns", String(header?.length));
   const col = (n) => header.indexOf(n);
   const body = rows.slice(1);
   check(body.length > 0, "the data table has rows (an evaluation ran)");

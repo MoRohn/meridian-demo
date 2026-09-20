@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Answer } from "../typesafe/types";
-import { openaiCell, scoreCeiling, typesafeCell } from "./cells";
+import { impliedYesProbability, openaiCell, scoreCeiling, typesafeCell, yesTone } from "./cells";
 
 const choice: Answer = { type: "choice", choice: "analyze_contract", probabilities: { small_talk: 0.02, analyze_contract: 0.91, check_compliance: 0.07 }, confidence: 0.75 };
 const score: Answer = { type: "score", score: 1.18, legend: { "0": "a", "1": "b", "2": "c" }, probabilities: { "0": 0.1, "1": 0.55, "2": 0.35 }, confidence: 0.54 };
@@ -41,13 +41,51 @@ describe("scoreCeiling", () => {
   });
 });
 
+describe("impliedYesProbability", () => {
+  it("reads a confident yes as a high chance of yes and a confident no as a low one", () => {
+    expect(impliedYesProbability(true, 0.99)).toBe(0.99);
+    expect(impliedYesProbability(false, 0.99)).toBeCloseTo(0.01, 10);
+  });
+  it("has nothing to say without a reported confidence, and never leaves 0..1", () => {
+    expect(impliedYesProbability(true, null)).toBeNull();
+    expect(impliedYesProbability(true, 1.4)).toBe(1);
+    expect(impliedYesProbability(false, 1.4)).toBe(0);
+  });
+});
+
+describe("yesTone", () => {
+  it("tones a likely yes rose, a likely no emerald, and the middle amber", () => {
+    expect([yesTone(0.9), yesTone(0.6), yesTone(0.5), yesTone(0.4), yesTone(0.01)]).toEqual(["rose", "rose", "amber", "emerald", "emerald"]);
+  });
+});
+
 describe("openaiCell", () => {
   it("says Yes or No for a yes/no question, never true or false", () => {
-    expect(openaiCell({ type: "noul", noul: 1 }, true, 0.8)).toEqual({ main: "Yes", sub: "self-reported 80%" });
-    expect(openaiCell({ type: "noul", noul: 1 }, false, null)).toEqual({ main: "No", sub: "" });
+    expect(openaiCell({ type: "noul", noul: 1 }, true, 0.8)).toMatchObject({ main: "Yes", sub: "self-reported 80%" });
+    expect(openaiCell({ type: "noul", noul: 1 }, false, null)).toMatchObject({ main: "No", sub: "" });
   });
   it("shows a choice or a level as it was answered", () => {
     expect(openaiCell(choice, "check_compliance", 0.9).main).toBe("check_compliance");
-    expect(openaiCell(score, 2, 0.7)).toEqual({ main: "2", sub: "self-reported 70%" });
+    expect(openaiCell(score, 2, 0.7)).toMatchObject({ main: "2", sub: "self-reported 70%" });
+  });
+
+  it("draws a yes/no bar on TypeSafe's scale: the probability of yes its confidence implies, toned like TypeSafe's", () => {
+    const yes = openaiCell({ type: "noul", noul: 0 }, true, 0.99);
+    expect(yes.bar).toEqual({ value: 0.99, tone: "rose" });
+    const no = openaiCell({ type: "noul", noul: 0 }, false, 0.99);
+    expect(no.bar?.value).toBeCloseTo(0.01, 10);
+    expect(no.bar?.tone).toBe("emerald");
+    expect(no.detail).toContain("1%");
+  });
+  it("draws a choice bar as its self-reported confidence in the chosen option", () => {
+    expect(openaiCell(choice, "analyze_contract", 0.8).bar).toEqual({ value: 0.8, tone: "accent" });
+  });
+  it("draws a level bar as the level over the top level, whether or not a confidence was reported", () => {
+    expect(openaiCell(score, 1, 0.7).bar).toEqual({ value: 0.5, tone: "amber" }); // level 1 of a top level of 2
+    expect(openaiCell(score, 2, null).bar).toEqual({ value: 1, tone: "amber" });
+  });
+  it("draws no bar when it has no confidence to draw one from (except a level)", () => {
+    expect(openaiCell({ type: "noul", noul: 0 }, true, null).bar).toBeNull();
+    expect(openaiCell(choice, "analyze_contract", null).bar).toBeNull();
   });
 });

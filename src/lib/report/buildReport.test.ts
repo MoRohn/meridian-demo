@@ -5,6 +5,7 @@ import type { EvalKind, EvalResult } from "../eval/types";
 import type { TraceEntry } from "../orchestrator/run";
 import { buildReportDoc, buildReportTable, cell, reportFilename, type ReportInput } from "./buildReport";
 import { renderMarkdown } from "./render/markdown";
+import { fmtUsd } from "../compare/pricing";
 
 const buildReportMarkdown = (input: ReportInput) => renderMarkdown(buildReportDoc(input));
 
@@ -33,8 +34,8 @@ describe("cell", () => {
 
 describe("buildReportTable", () => {
   const evals = [
-    row("risk", "typesafe", "risk", result(0.85)),
-    row("risk", "openai", "risk", result(0.4)),
+    row("risk", "typesafe", "risk", result(0.85), { response: { ms: 2400, costUsd: 0.00042 } }),
+    row("risk", "openai", "risk", result(0.4), { response: { ms: 850, costUsd: 0 } }),
     row("citation", "typesafe", "citation", result(0.9)),
     row("compliance:excerpt", "typesafe", "compliance", result(0.7)),
   ];
@@ -59,9 +60,29 @@ describe("buildReportTable", () => {
     expect(ts[col("Result")]).toBe("Pass");
     expect(ts[col("Band (0-10)")]).toBe("6-10");
     expect(ts[col("Rubric")]).toBe("risk v2");
-    expect(ts[col("Judge time")]).toBe("1.5s");
+    expect(ts[col("Resp. time")]).toBe("2.4s");
+    expect(ts[col("Resp. cost")]).toBe(fmtUsd(0.00042));
     expect(oa[col("Score")]).toBe("40%");
     expect(oa[col("Result")]).toBe("Fail");
+  });
+
+  it("shows the answering model's response time and cost, not the judge's, and drops the judge columns", () => {
+    expect(table.columns).not.toContain("Judge time");
+    expect(table.columns).not.toContain("Judge cost");
+    expect(table.columns).not.toContain("Judge model");
+    expect(table.columns.indexOf("Resp. cost")).toBe(table.columns.indexOf("Resp. time") + 1);
+    const [, oa] = table.rows;
+    expect(oa[col("Resp. time")]).toBe("850ms");
+    expect(oa[col("Resp. cost")]).toBe(fmtUsd(0)); // a call that really cost nothing is a cost, not n/a
+  });
+
+  it("writes n/a, never zero, when no call was measured behind an answer", () => {
+    const [, , citationTs] = table.rows; // the citation row was stored without a response
+    expect(citationTs[col("Resp. time")]).toBe("n/a");
+    expect(citationTs[col("Resp. cost")]).toBe("n/a");
+    const noMs = buildReportTable([row("risk", "typesafe", "risk", result(0.8), { response: { ms: null, costUsd: 0.001 } })]);
+    expect(noMs.rows[0][col("Resp. time")]).toBe("n/a");
+    expect(noMs.rows[0][col("Resp. cost")]).toBe(fmtUsd(0.001));
   });
 
   it("shows why a model has no score instead of a zero", () => {

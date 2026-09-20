@@ -154,7 +154,13 @@ export function ChatConversation({
             A passage is highlighted: Analyze/Check compliance below score just that excerpt.
           </p>
         )}
-        <div className="-mx-3 mb-2 flex flex-nowrap gap-1.5 overflow-x-auto px-3 pb-0.5 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
+        {/* While a turn is sending every chip is disabled, and a scrolling row with nothing focusable in it cannot be reached by keyboard; so the row itself takes focus then. */}
+        <div
+          role="group"
+          aria-label="Suggested prompts"
+          tabIndex={sending ? 0 : undefined}
+          className="-mx-3 mb-2 flex flex-nowrap gap-1.5 overflow-x-auto px-3 pb-0.5 focus-visible:outline-2 focus-visible:outline-deep sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0"
+        >
           {SUGGESTIONS.map((s) => {
             const runsOnExcerpt = Boolean(s.excerptAction && selectedExcerpt);
             return (

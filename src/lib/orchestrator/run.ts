@@ -1,4 +1,5 @@
 import { systemOne, type KeyOverride } from "../typesafe/client";
+import { typesafeRequestBytes } from "../typesafe/measure";
 import { SKILLS } from "../skills";
 import { buildStateJson, type SessionState, type TurnContext } from "./state";
 import type { CompositeRisk } from "../skills/clauseRisk";
@@ -19,13 +20,15 @@ export type { ComplianceFlag } from "./compose";
 
 /**
  * Real, measured figures about what actually went into this turn's `state`
- * — not an estimate. `bytes` is the exact UTF-8 byte size of the object
- * `systemOne` was called with (`Buffer.byteLength`, not `.length` — legal
- * text has plenty of non-ASCII punctuation that would otherwise undercount);
+ * — not an estimate. `bytes` is the exact UTF-8 byte size of what `systemOne`
+ * was sent: the `state` and the question map (see `typesafeRequestBytes`).
  * `historyTurnsIncluded`/`historyTurnsTotal` show how much of the rolling
  * memory window (`HISTORY_WINDOW` in `state.ts`) is actually in play versus
- * how much history the session has accumulated. This is what the Trace
- * tab's context-window row is built from.
+ * how much conversation the session has accumulated. Both count turns (a
+ * turn is one user message, with the reply that followed it) and include the
+ * message being answered, so on the second message they read 2/2, matching
+ * the number of messages the reader has sent. This is what the Trace tab's
+ * context-window row is built from.
  */
 export interface ContextStats {
   bytes: number;
@@ -33,6 +36,8 @@ export interface ContextStats {
   historyTurnsIncluded: number;
   historyTurnsTotal: number;
 }
+
+const userTurns = (turns: readonly { role?: string; from?: string }[]) => turns.filter((t) => (t.role ?? t.from) === "user").length;
 
 export interface TurnResult {
   reply: string;
@@ -92,10 +97,11 @@ export function buildTurnRequest(session: SessionState, message: string): TurnRe
 export async function handleTurn(session: SessionState, message: string, override?: KeyOverride, writerOverride?: KeyOverride): Promise<TurnResult> {
   const { stateJson, questions, owner } = buildTurnRequest(session, message);
   const contextStats: ContextStats = {
-    bytes: Buffer.byteLength(JSON.stringify(stateJson), "utf8"),
+    bytes: typesafeRequestBytes(stateJson, questions),
     documentBytes: session.activeDocument ? Buffer.byteLength(session.activeDocument.text, "utf8") : 0,
-    historyTurnsIncluded: stateJson.conversation.length,
-    historyTurnsTotal: session.history.length,
+    // +1: the message being answered is in the model's context but not yet in the session's history.
+    historyTurnsIncluded: userTurns(stateJson.conversation) + 1,
+    historyTurnsTotal: userTurns(session.history) + 1,
   };
   const response = await systemOne(stateJson, questions, override);
   const answers = response.answers;

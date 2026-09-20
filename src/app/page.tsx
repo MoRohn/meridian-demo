@@ -22,6 +22,7 @@ import { ComplianceFlags } from "@/components/ComplianceFlags";
 import { CitationVerifier } from "@/components/CitationVerifier";
 import type { TraceEntry, ComplianceFlag, ContextStats } from "@/lib/orchestrator/run";
 import { ContextMeter, type BackendContextMetrics } from "@/components/ContextMeter";
+import { answerCallMetrics } from "@/lib/contextMetrics";
 import type { CompositeRisk } from "@/lib/skills/clauseRisk";
 import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
 import { CONTRACT_TYPES } from "@/lib/skills/contractType";
@@ -154,8 +155,9 @@ export default function Home() {
   const [openaiKeyValid, setOpenaiKeyValid] = useState<boolean | null>(null);
 
   async function validateKeys(settings: ApiKeySettings) {
-    const tOverride = typesafeOverride(settings);
-    const oOverride = openaiOverride(settings);
+    // Only a saved key needs validating; a model picked on its own rides on the server's key.
+    const tOverride = typesafeOverride(settings)?.apiKey ? typesafeOverride(settings) : undefined;
+    const oOverride = openaiOverride(settings)?.apiKey ? openaiOverride(settings) : undefined;
     if (!tOverride) setTypesafeKeyValid(null);
     if (!oOverride) setOpenaiKeyValid(null);
     if (!tOverride && !oOverride) return;
@@ -184,8 +186,8 @@ export default function Home() {
   // user-supplied key that hasn't been validated yet (or failed validation)
   // never overstates itself as live; it just falls back to whatever the
   // server's env-based key already reports.
-  const effectiveTypesafeLive = tsOverride ? typesafeKeyValid === true : live;
-  const effectiveOpenaiConfigured = oaOverride ? openaiKeyValid === true : openaiConfigured;
+  const effectiveTypesafeLive = tsOverride?.apiKey ? typesafeKeyValid === true : live;
+  const effectiveOpenaiConfigured = oaOverride?.apiKey ? openaiKeyValid === true : openaiConfigured;
 
   useEffect(() => {
     callApi({ action: "reset", sessionId, typesafeOverride: tsOverride, openaiOverride: oaOverride })
@@ -253,6 +255,7 @@ export default function Home() {
           inputBytes: result.context.bytes,
           inputTokens: result.usage.input_tokens,
           outputTokens: result.usage.output_tokens,
+          answer: answerCallMetrics(result.answer),
         });
         finishTypesafeActivity(tsEpoch, typesafeActivityResult(result.source, result.elapsedMs, result.usage));
         setLive(Boolean(data.live));
@@ -302,6 +305,7 @@ export default function Home() {
                   inputBytes: result.requestBytes,
                   inputTokens: result.usage.input_tokens,
                   outputTokens: result.usage.output_tokens,
+                  answer: answerCallMetrics(data.turn?.answer),
                 });
                 const price = matchReferencePrice(result.model);
                 const cost =
@@ -599,7 +603,7 @@ export default function Home() {
       <span className="hidden min-w-0 sm:flex">
         <ContextFact label="type" value={contractTypeLabel ?? "not yet classified"} />
       </span>
-      <ContextFact label="turns" value={String(messages.length)} />
+      <ContextFact label="turns" value={String(messages.filter((m) => m.role === "user").length)} />
     </section>
   );
 

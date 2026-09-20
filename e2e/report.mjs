@@ -151,7 +151,7 @@ for (const [tab, activity] of [["Risk", "Risk score"], ["Compliance", "Complianc
   const compare = await headings(panel.locator("table").first());
   const firstColumn = { Risk: "rating", Compliance: "check", Citations: "check", Trace: "question" }[tab];
   check(compare.join("|") === `${firstColumn}|typesafe|openai|match`, `${tab}: the results use the shared comparison table`, compare.join("|"));
-  check((await headings(panel.locator('table[aria-label="Evaluation scores"]'))).join("|") === "model|score|result|judge time|judge cost", `${tab}: the evaluation uses the shared score table`);
+  check((await headings(panel.locator('table[aria-label="Evaluation scores"]'))).join("|") === "model|score|result|resp. time|resp. cost", `${tab}: the evaluation uses the shared score table`);
   check((await panel.locator("table").count()) === 2, `${tab}: exactly the comparison and the evaluation, no leftover card layout`, String(await panel.locator("table").count()));
 }
 check(!(await menuButton.isDisabled()), "Download report is enabled once models have run");
@@ -203,7 +203,7 @@ const md = readFileSync(paths.md, "utf8");
 verify("md", md);
 const rows = md.split("\n").filter((l) => l.startsWith("| ")).map((l) => l.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim()));
 const header = rows.find((r) => r[0] === "Activity");
-check(Boolean(header) && header.length === 14, "md: the data table has 14 columns", String(header?.length));
+check(Boolean(header) && header.length === 13, "md: the data table has 13 columns", String(header?.length));
 const col = (n) => (header ? header.indexOf(n) : -1); // no table means no evaluation ran, already reported above
 for (const [activity, model, score, result] of DATA_ROWS) {
   const row = rows.find((r) => r[0] === activity && r[1] === "Whole document" && r[col("Model")] === model) ?? rows.find((r) => r[0] === activity && r[col("Model")] === model);

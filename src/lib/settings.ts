@@ -126,15 +126,27 @@ export function saveSettings(settings: ApiKeySettings): void {
   }
 }
 
-/** The subset of settings relevant to a single backend, shaped to match the server's KeyOverride. */
+/**
+ * The subset of settings relevant to a single backend, shaped to match the server's KeyOverride.
+ *
+ * A saved key travels with the selected model. With no saved key the server uses its own (.env.local) key, but a model
+ * the reader picked must still be honoured, so it is sent alone. The dropdown's default is not a pick: leaving it
+ * alone lets the server's `*_MODEL` variable decide.
+ */
+function backendOverride(apiKey: string, model: string, defaultModel: string): { apiKey?: string; model?: string } | undefined {
+  const key = apiKey.trim();
+  const picked = model.trim();
+  if (key) return { apiKey: key, model: picked || undefined };
+  if (picked && picked !== defaultModel) return { model: picked };
+  return undefined;
+}
+
 export function typesafeOverride(settings: ApiKeySettings): { apiKey?: string; model?: string } | undefined {
-  if (!settings.typesafeApiKey.trim()) return undefined;
-  return { apiKey: settings.typesafeApiKey.trim(), model: settings.typesafeModel.trim() || undefined };
+  return backendOverride(settings.typesafeApiKey, settings.typesafeModel, DEFAULT_TYPESAFE_MODEL);
 }
 
 export function openaiOverride(settings: ApiKeySettings): { apiKey?: string; model?: string } | undefined {
-  if (!settings.openaiApiKey.trim()) return undefined;
-  return { apiKey: settings.openaiApiKey.trim(), model: settings.openaiModel.trim() || undefined };
+  return backendOverride(settings.openaiApiKey, settings.openaiModel, DEFAULT_OPENAI_MODEL);
 }
 
 /** Whether first results are evaluated automatically. Settings saved before this option existed count as on. */
