@@ -1,14 +1,14 @@
 import type { ComplianceFlag } from "@/lib/orchestrator/run";
 import type { OpenAIRunOutcome } from "@/lib/openai/types";
 import { openaiAnswerFor } from "@/lib/compare/agreement";
-import { ProbabilityBar } from "./ProbabilityBar";
 import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
+import { ComparisonTable } from "./ComparisonTable";
+import { complianceGroups } from "@/lib/compare/rows";
 import { EvaluationPanel } from "./EvaluationPanel";
 import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
 import { buildCompliancePacket, type ComplianceDecision } from "@/lib/eval/packets";
-import { COMPLIANCE_CHECKS } from "@/lib/skills/complianceGuard";
 
 /** Backend-neutral decisions for the evaluation packet. TypeSafe's come straight from the flags; OpenAI's from its boolean answers. */
 function typesafeDecisions(flags: ComplianceFlag[]): ComplianceDecision[] {
@@ -22,73 +22,6 @@ function openaiDecisions(flags: ComplianceFlag[], openaiOutcome: OpenAIRunOutcom
     if (oa) out.push({ id: f.id, flagged: Boolean(oa.value) });
   }
   return out;
-}
-
-function FlagItem({
-  f,
-  openaiOutcome,
-  openaiConfigured,
-}: {
-  f: ComplianceFlag;
-  openaiOutcome: OpenAIRunOutcome | null;
-  openaiConfigured: boolean;
-}) {
-  const oaAnswer = openaiAnswerFor(openaiOutcome, f.id);
-  const oaFlagged = oaAnswer != null ? Boolean(oaAnswer.value) : null;
-  return (
-    <li
-      className={`animate-in rounded-xl border p-3 ${
-        f.flagged ? "border-rose-500/25 bg-rose-500/[0.06]" : "border-border bg-surface"
-      }`}
-    >
-      <p className="text-sm font-bold text-foreground">{f.label}</p>
-      <p className="mt-0.5 text-xs text-muted">{COMPLIANCE_CHECKS[f.id].definition}</p>
-      <div className="mt-2 grid grid-cols-1 gap-3 @xl:grid-cols-2">
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <p className="text-xs font-bold uppercase tracking-wide text-muted">TypeSafe</p>
-            <span
-              className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-semibold ${
-                f.flagged ? "bg-rose-600/10 text-rose-800" : "bg-emerald-600/10 text-emerald-800"
-              }`}
-            >
-              {f.flagged ? "FLAGGED" : "CLEAR"}
-            </span>
-          </div>
-          <ProbabilityBar label="probability" value={f.probability} tone={f.flagged ? "rose" : "emerald"} highlight />
-        </div>
-        <div className="border-t border-border/60 pt-2 @xl:border-t-0 @xl:border-l @xl:pl-3 @xl:pt-0">
-          <div className="mb-1 flex items-center justify-between">
-            <p className="text-xs font-bold uppercase tracking-wide text-muted">OpenAI</p>
-            {oaFlagged != null && (
-              <span
-                className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-semibold ${
-                  oaFlagged ? "bg-rose-600/10 text-rose-800" : "bg-emerald-600/10 text-emerald-800"
-                }`}
-              >
-                {oaFlagged ? "FLAGGED" : "CLEAR"}
-              </span>
-            )}
-          </div>
-          {oaAnswer ? (
-            <>
-              <ProbabilityBar
-                label="self-reported"
-                value={oaAnswer.selfReportedConfidence ?? 0.5}
-                tone={oaFlagged ? "rose" : "emerald"}
-                highlight
-              />
-              {oaAnswer.selfReportedConfidence == null && (
-                <p className="mt-1 text-xs text-muted">no confidence reported</p>
-              )}
-            </>
-          ) : (
-            <p className="text-sm text-muted">{openaiConfigured ? "no answer" : "not run"}</p>
-          )}
-        </div>
-      </div>
-    </li>
-  );
 }
 
 /** Excerpt-scoped compliance flags, shown above the whole-document list while a passage is highlighted. */
@@ -109,7 +42,7 @@ function ExcerptComplianceSection({
 }) {
   const preview = selectedExcerpt.length > 160 ? `${selectedExcerpt.slice(0, 160)}…` : selectedExcerpt;
   return (
-    <div className="animate-in space-y-2 rounded-xl border-2 border-accent bg-accent-soft p-4">
+    <div className="animate-in space-y-2 rounded-xl border-2 border-accent bg-accent-soft p-3">
       <p className="text-xs font-bold uppercase tracking-wide text-accent-soft-ink">Selected excerpt</p>
       <p className="border-l-2 border-accent-soft-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
       {excerptStatus === "pending" ? (
@@ -119,11 +52,7 @@ function ExcerptComplianceSection({
       ) : excerptFlags.length === 0 ? (
         <p className="text-sm text-muted">No answer yet.</p>
       ) : (
-        <ul className="space-y-2">
-          {excerptFlags.map((f) => (
-            <FlagItem key={f.id} f={f} openaiOutcome={excerptOpenaiOutcome} openaiConfigured={openaiConfigured} />
-          ))}
-        </ul>
+        <ComparisonTable groups={complianceGroups(excerptFlags, excerptOpenaiOutcome, openaiConfigured)} label="Excerpt compliance checks" firstColumn="Check" />
       )}
       <OpenAINote outcome={excerptOpenaiOutcome} />
       {excerptStatus === "done" && excerptFlags.length > 0 && (
@@ -224,18 +153,19 @@ export function ComplianceFlags({
   ];
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       {excerptSection}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <EvalSummaryBar icon="shield" headline={`${flaggedCount}/${flags.length} flags tripped`} stats={summaryStats} />
         {onRerun && <RerunButton onClick={onRerun} pending={Boolean(rerunPending)} label={rerunLabel} />}
       </div>
-      <ul className="space-y-2">
-        {flags.map((f) => (
-          <FlagItem key={f.id} f={f} openaiOutcome={openaiOutcome} openaiConfigured={openaiConfigured} />
-        ))}
-      </ul>
+      {!openaiConfigured && (
+        <p className="text-xs text-muted">
+          Set <code className="text-accent-soft-ink">OPENAI_API_KEY</code> to see OpenAI&rsquo;s answer beside each check.
+        </p>
+      )}
       <OpenAINote outcome={openaiOutcome} />
+      <ComparisonTable groups={complianceGroups(flags, openaiOutcome, openaiConfigured)} label="Compliance checks" firstColumn="Check" />
       <EvaluationPanel
         kind="compliance"
         typesafePacket={buildCompliancePacket({ scope: "document", decisions: typesafeDecisions(flags), sourceText: documentText ?? null })}

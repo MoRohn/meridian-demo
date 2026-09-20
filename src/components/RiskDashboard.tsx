@@ -1,61 +1,23 @@
-import type { CompositeRisk, RiskDimensionId } from "@/lib/skills/clauseRisk";
+import type { CompositeRisk } from "@/lib/skills/clauseRisk";
 import { RISK_BAND_LABELS, RISK_DIMENSIONS, riskBand } from "@/lib/skills/clauseRisk";
 import type { OpenAIRunOutcome } from "@/lib/openai/types";
-import { openaiAnswerFor } from "@/lib/compare/agreement";
-import { ProbabilityBar, ConfidenceBadge } from "./ProbabilityBar";
+import { computeOpenAIRisk, openaiRatings, overallTone, riskGroups } from "@/lib/compare/rows";
 import { OpenAINote } from "./OpenAINote";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar, type SummaryStat } from "./EvalSummaryBar";
+import { ComparisonTable } from "./ComparisonTable";
 import { EvaluationPanel } from "./EvaluationPanel";
 import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
-import { buildRiskPacket, type RiskRating } from "@/lib/eval/packets";
+import { buildRiskPacket } from "@/lib/eval/packets";
 
-function riskTone(overall: number) {
-  const band = riskBand(overall);
-  const tone: "rose" | "amber" | "emerald" = band === "high" ? "rose" : band === "moderate" ? "amber" : "emerald";
-  const label = RISK_BAND_LABELS[band];
-  const text = tone === "rose" ? "text-rose-800" : tone === "amber" ? "text-amber-800" : "text-emerald-800";
-  const ring = tone === "rose" ? "from-rose-500" : tone === "amber" ? "from-amber-500" : "from-emerald-500";
-  return { tone, label, text, ring };
-}
-
-/** Each DIMENSION gets its own severity color based on its own normalized value, not the composite's — a low-risk termination clause shouldn't read as red just because liability dragged the overall score up. */
-function dimensionTone(normalized: number): "rose" | "amber" | "emerald" {
-  return normalized >= 0.66 ? "rose" : normalized >= 0.33 ? "amber" : "emerald";
-}
-
-/** OpenAI's per-dimension level index, normalized the same way TypeSafe's is, plus the composite weighted overall. */
-function computeOpenAIRisk(outcome: OpenAIRunOutcome | null): { overall: number; byDimension: Partial<Record<RiskDimensionId, { normalized: number; confidence: number | null }>> } | null {
-  if (!outcome?.ok) return null;
-  const ids = Object.keys(RISK_DIMENSIONS) as RiskDimensionId[];
-  const byDimension: Partial<Record<RiskDimensionId, { normalized: number; confidence: number | null }>> = {};
-  let overall = 0;
-  let any = false;
-  for (const id of ids) {
-    const answer = openaiAnswerFor(outcome, id);
-    if (!answer) continue;
-    any = true;
-    const topLevel = RISK_DIMENSIONS[id].criteria.length - 1;
-    const normalized = Number(answer.value) / topLevel;
-    byDimension[id] = { normalized, confidence: answer.selfReportedConfidence };
-    overall += normalized * RISK_DIMENSIONS[id].weight;
-  }
-  return any ? { overall, byDimension } : null;
-}
-
-/** OpenAI's per-dimension results as the backend-neutral ratings the evaluation packet expects. */
-function openaiRatings(risk: NonNullable<ReturnType<typeof computeOpenAIRisk>>): RiskRating[] {
-  return (Object.keys(RISK_DIMENSIONS) as RiskDimensionId[])
-    .filter((id) => risk.byDimension[id])
-    .map((id) => ({ id, normalized: risk.byDimension[id]!.normalized }));
-}
-
-/** A one-line summary of which dimension is driving the composite score, so the headline number always comes with a "why." */
-function drivingFactor(ratings: { id: RiskDimensionId; normalized: number }[]): string {
-  const top = [...ratings].sort((a, b) => b.normalized - a.normalized)[0];
-  if (top.normalized < 0.33) return "No single dimension stands out; every clause scored low.";
-  const dim = RISK_DIMENSIONS[top.id];
-  return `Primarily driven by ${dim.label.toLowerCase()} (weight ${dim.weight}).`;
+/** Where OpenAI's figures cannot appear, in the same one line every tab uses. */
+function OpenAIKeyNote({ configured }: { configured: boolean }) {
+  if (configured) return null;
+  return (
+    <p className="text-xs text-muted">
+      Set <code className="text-accent-soft-ink">OPENAI_API_KEY</code> to see OpenAI&rsquo;s figures beside TypeSafe&rsquo;s.
+    </p>
+  );
 }
 
 /** Excerpt-scoped risk score, shown above the whole-document breakdown while a passage is highlighted. */
@@ -75,44 +37,22 @@ function ExcerptRiskSection({
   typesafeSource: "live" | "mock" | null;
 }) {
   const preview = selectedExcerpt.length > 160 ? `${selectedExcerpt.slice(0, 160)}…` : selectedExcerpt;
-  const ts = excerptRisk ? riskTone(excerptRisk.overall) : null;
   const openaiRisk = computeOpenAIRisk(excerptOpenaiOutcome);
-  const oa = openaiRisk ? riskTone(openaiRisk.overall) : null;
 
   return (
-    <div className="animate-in space-y-2 rounded-xl border-2 border-accent bg-accent-soft p-4">
+    <div className="animate-in space-y-2 rounded-xl border-2 border-accent bg-accent-soft p-3">
       <p className="text-xs font-bold uppercase tracking-wide text-accent-soft-ink">Selected excerpt</p>
       <p className="border-l-2 border-accent-soft-ink/40 pl-2 text-sm italic text-secondary">&ldquo;{preview}&rdquo;</p>
       {excerptStatus === "pending" ? (
         <p className="text-sm font-semibold text-muted">Scoring…</p>
-      ) : excerptStatus === "error" ? (
-        <p className="text-sm font-semibold text-rose-800">Couldn&rsquo;t score this excerpt.</p>
+      ) : excerptStatus === "error" || !excerptRisk ? (
+        <p className="text-sm font-semibold text-rose-800">{excerptStatus === "error" ? "Couldn’t score this excerpt." : "No score yet."}</p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-          <div className="rounded-lg border border-border bg-surface p-3">
-            <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">TypeSafe</p>
-            {ts ? (
-              <div className="flex items-baseline justify-between">
-                <span className="text-2xl font-extrabold tracking-tight text-foreground">{Math.round(excerptRisk!.overall * 100)}%</span>
-                <span className={`text-sm font-bold ${ts.text}`}>{ts.label}</span>
-              </div>
-            ) : (
-              <p className="text-sm text-muted">—</p>
-            )}
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-3">
-            <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">OpenAI</p>
-            {oa ? (
-              <div className="flex items-baseline justify-between">
-                <span className="text-2xl font-extrabold tracking-tight text-foreground">{Math.round(openaiRisk!.overall * 100)}%</span>
-                <span className={`text-sm font-bold ${oa.text}`}>{oa.label}</span>
-              </div>
-            ) : (
-              <p className="text-sm text-muted">{openaiConfigured ? "not run" : "Set OPENAI_API_KEY to compute this."}</p>
-            )}
-            <OpenAINote outcome={excerptOpenaiOutcome} />
-          </div>
-        </div>
+        <>
+          <ComparisonTable groups={riskGroups(excerptRisk, openaiRisk, openaiConfigured)} label="Excerpt risk" firstColumn="Rating" />
+          <OpenAIKeyNote configured={openaiConfigured} />
+          <OpenAINote outcome={excerptOpenaiOutcome} />
+        </>
       )}
       {excerptStatus === "done" && (
         <EvaluationPanel
@@ -196,7 +136,7 @@ export function RiskDashboard({
   }
   if (!risk) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-3">
         {excerptSection}
         <div className="flex items-center justify-between gap-3">
           <p className="text-base text-secondary">Ask the assistant to analyze the loaded contract to compute a risk score.</p>
@@ -206,101 +146,32 @@ export function RiskDashboard({
     );
   }
 
-  const ts = riskTone(risk.overall);
+  const tsTone = overallTone(risk.overall);
   const openaiRisk = computeOpenAIRisk(openaiOutcome);
-  const oa = openaiRisk ? riskTone(openaiRisk.overall) : null;
 
-  const summaryStats: SummaryStat[] = [{ label: "level:", value: ts.label, tone: ts.tone }];
-  if (oa) {
-    const deltaPts = Math.round(Math.abs(risk.overall - openaiRisk!.overall) * 100);
+  const summaryStats: SummaryStat[] = [{ label: "level:", value: RISK_BAND_LABELS[riskBand(risk.overall)], tone: tsTone }];
+  if (openaiRisk) {
+    const deltaPts = Math.round(Math.abs(risk.overall - openaiRisk.overall) * 100);
     summaryStats.push(
-      ts.tone === oa.tone
+      tsTone === overallTone(openaiRisk.overall)
         ? { label: "agree:", value: `yes (Δ${deltaPts}pt)`, tone: "emerald" }
-        : { label: "agree:", value: `no (Δ${deltaPts}pt)`, tone: "rose" }
+        : { label: "agree:", value: `no (Δ${deltaPts}pt)`, tone: "rose" },
     );
   }
+  const weights = (Object.keys(RISK_DIMENSIONS) as (keyof typeof RISK_DIMENSIONS)[]).map((id) => `${RISK_DIMENSIONS[id].weight}×${RISK_DIMENSIONS[id].label.split(" ")[0].toLowerCase()}`).join(" + ");
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {excerptSection}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <EvalSummaryBar icon="scale" headline={`Composite risk: ${Math.round(risk.overall * 100)}%`} stats={summaryStats} />
         {onRerun && <RerunButton onClick={onRerun} pending={Boolean(rerunPending)} label={rerunLabel} />}
       </div>
-      <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-        <div className="animate-in overflow-hidden rounded-xl border border-border bg-surface p-4">
-          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">TypeSafe</p>
-          <div className={`h-1 w-full bg-gradient-to-r ${ts.ring} to-transparent`} />
-          <div className="mt-3 flex items-baseline justify-between">
-            <span className="text-5xl font-extrabold tracking-tight text-foreground">{Math.round(risk.overall * 100)}%</span>
-            <span className={`text-sm font-bold ${ts.text}`}>{ts.label}</span>
-          </div>
-          <p className="mt-2 text-xs font-medium text-muted">{drivingFactor(risk.perDimension)}</p>
-        </div>
+      <OpenAIKeyNote configured={openaiConfigured} />
+      <OpenAINote outcome={openaiOutcome} />
 
-        <div className="animate-in overflow-hidden rounded-xl border border-border bg-surface p-4">
-          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">OpenAI</p>
-          {oa ? (
-            <>
-              <div className={`h-1 w-full bg-gradient-to-r ${oa.ring} to-transparent`} />
-              <div className="mt-3 flex items-baseline justify-between">
-                <span className="text-5xl font-extrabold tracking-tight text-foreground">{Math.round(openaiRisk!.overall * 100)}%</span>
-                <span className={`text-sm font-bold ${oa.text}`}>{oa.label}</span>
-              </div>
-              <p className="mt-2 text-xs font-medium text-muted">{drivingFactor(openaiRatings(openaiRisk!))}</p>
-            </>
-          ) : (
-            <p className="pt-2 text-sm text-muted">
-              {openaiConfigured ? "not run for this turn" : "Set OPENAI_API_KEY to compute this alongside TypeSafe."}
-            </p>
-          )}
-          <OpenAINote outcome={openaiOutcome} />
-        </div>
-      </div>
-
-      <p className="text-sm text-muted">
-        overall = 0.5×liability + 0.3×indemnification + 0.2×termination (weights owned in code, not either model)
-      </p>
-
-      <ul className="space-y-3">
-        {risk.perDimension.map((d) => {
-          const dim = RISK_DIMENSIONS[d.id];
-          const oaDim = openaiRisk?.byDimension[d.id];
-          return (
-            <li key={d.id} className="animate-in space-y-2 rounded-xl border border-border bg-surface p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-bold text-secondary">{dim.label}</p>
-                  <p className="text-xs text-muted">{dim.summary}</p>
-                </div>
-                <span className="shrink-0 text-xs text-muted">weight {dim.weight}</span>
-              </div>
-              <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
-                <div>
-                  <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">TypeSafe</p>
-                  <ProbabilityBar label="normalized" value={d.normalized} tone={dimensionTone(d.normalized)} highlight />
-                  <div className="mt-1">
-                    <ConfidenceBadge confidence={d.confidence} />
-                  </div>
-                </div>
-                <div className="border-t border-border/60 pt-2 @xl:border-t-0 @xl:border-l @xl:pl-3 @xl:pt-0">
-                  <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">OpenAI</p>
-                  {oaDim ? (
-                    <>
-                      <ProbabilityBar label="normalized" value={oaDim.normalized} tone={dimensionTone(oaDim.normalized)} highlight />
-                      {oaDim.confidence != null && (
-                        <p className="mt-1 text-xs font-semibold text-muted">self-reported {Math.round(oaDim.confidence * 100)}%</p>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-sm text-muted">{openaiConfigured ? "no answer" : "not run"}</p>
-                  )}
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      <ComparisonTable groups={riskGroups(risk, openaiRisk, openaiConfigured)} label="Risk ratings" firstColumn="Rating" />
+      <p className="text-xs text-muted">overall = {weights} (weights owned in code, not either model)</p>
 
       <EvaluationPanel
         kind="risk"

@@ -160,6 +160,8 @@ def health():
         "status": "ok",
         "judge_model": JUDGE_MODEL,
         "judge_configured": bool(os.environ.get("OPENAI_API_KEY")),
+        # Who can judge, each with its default model and whether the service has its own key for it.
+        "providers": {p: {"default_model": judge.DEFAULT_MODELS[p], "env_key": judge.env_key(p) is not None} for p in judge.PROVIDERS},
         "pass_threshold": PASS_THRESHOLD,
         "top_logprobs": judge.TOP_LOGPROBS,
         "telemetry_opt_out": os.environ.get("DEEPEVAL_TELEMETRY_OPT_OUT", "").upper() in ("YES", "1", "TRUE"),
@@ -195,22 +197,45 @@ def _judge_cost(metric) -> float | None:
 
 # A key that arrives with a request is used for that one call only: never stored, logged, or returned.
 _KEY_FORMAT = re.compile(r"^[\x21-\x7e]{16,300}$")  # printable ASCII, no whitespace
+# A model id is a short name, never free text: it goes to a provider's URL or body, so keep it to the characters ids use.
+_MODEL_FORMAT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
 
 
 @app.post("/evaluate", response_model=EvaluateResponse)
-def evaluate(req: EvaluateRequest, x_judge_api_key: str | None = Header(default=None)):
+def evaluate(
+    req: EvaluateRequest,
+    x_judge_api_key: str | None = Header(default=None),
+    x_judge_provider: str | None = Header(default=None),
+    x_judge_model: str | None = Header(default=None),
+):
     request_key = (x_judge_api_key or "").strip() or None
     if request_key and not _KEY_FORMAT.match(request_key):
         raise HTTPException(status_code=400, detail="The judge API key sent with this request is not in a valid format.")
-    if not request_key and not os.environ.get("OPENAI_API_KEY"):
+    provider = (x_judge_provider or "openai").strip().lower()
+    if provider not in judge.PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown judge provider. Use one of: {', '.join(judge.PROVIDERS)}.")
+    requested_model = (x_judge_model or "").strip() or None
+    if requested_model and not _MODEL_FORMAT.match(requested_model):
+        raise HTTPException(status_code=400, detail="The judge model sent with this request is not a valid model id.")
+    if not request_key and judge.env_key(provider) is None:
+        label = judge.PROVIDER_LABELS[provider]
         raise HTTPException(
             status_code=503,
-            detail="No judge API key: set OPENAI_API_KEY for the eval service, or save an OpenAI key in Meridian's Settings.",
+            detail=f"No judge API key for {label}: set {judge.ENV_KEYS[provider][0]} for the eval service, or save a {label} key in Meridian's Settings.",
         )
 
+    judge_model = judge.resolve_model(provider, requested_model)
+    # An OpenAI judge with no key of its own uses the service's environment (DeepEval reads it); the others always get an explicit key.
+    metric_key = request_key or (judge.env_key(provider) if provider != "openai" else None)
     rubric = RUBRICS[req.kind]
     test_case, integrity = judge.prepare_case(rubric, req.input, req.actual_output, req.context)
-    metric = judge.build_metric(rubric, req.backend, JUDGE_MODEL, PASS_THRESHOLD, api_key=request_key)
+    try:
+        metric = judge.build_metric(rubric, req.backend, judge_model, PASS_THRESHOLD, api_key=metric_key, provider=provider)
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"This eval service was installed without the {judge.PROVIDER_LABELS[provider]} SDK. Run `npm run eval-service:setup` to add it.",
+        ) from exc
 
     started = time.perf_counter()
     try:
@@ -222,22 +247,25 @@ def evaluate(req: EvaluateRequest, x_judge_api_key: str | None = Header(default=
         _record(req.kind, False, latency, error=code)
         log.warning(
             "eval_failed kind=%s backend=%s judge=%s latency_ms=%d error=%s exc=%s",
-            req.kind, req.backend, JUDGE_MODEL, latency, code, type(judge_errors.unwrap(exc)).__name__,
+            req.kind, req.backend, judge_model, latency, code, type(judge_errors.unwrap(exc)).__name__,
         )
         raise HTTPException(status_code=502, detail=f"G-Eval judge call failed ({code}): {message}") from exc
 
     latency = int((time.perf_counter() - started) * 1000)
     # A judge that answers outside 0-1 (say "99" on a 0-10 scale) must never be reported, and above all never passed.
-    if not isinstance(metric.score, (int, float)) or math.isnan(metric.score) or not 0.0 <= metric.score <= 1.0:
+    # The verdict is decided on the score as the reader sees it (see judge.settle_score), never on DeepEval's raw float.
+    settled = judge.settle_score(metric.score, PASS_THRESHOLD)
+    if settled is None:
         _record(req.kind, False, latency, error="judge_bad_score")
-        log.warning("eval_failed kind=%s backend=%s judge=%s latency_ms=%d error=judge_bad_score score=%r", req.kind, req.backend, JUDGE_MODEL, latency, metric.score)
+        log.warning("eval_failed kind=%s backend=%s judge=%s latency_ms=%d error=judge_bad_score score=%r", req.kind, req.backend, judge_model, latency, metric.score)
         raise HTTPException(status_code=502, detail="G-Eval judge call failed (judge_bad_score): The judge returned a score outside the valid range.")
+    score, success = settled
     response = EvaluateResponse(
-        score=metric.score,
+        score=score,
         reason=metric.reason or "The judge returned a score but no written reason.",
-        success=metric.is_successful(),
+        success=success,
         threshold=PASS_THRESHOLD,
-        judge_model=JUDGE_MODEL,
+        judge_model=judge_model,
         rubric=RubricInfo(id=rubric.id, version=rubric.version, title=rubric.title),
         steps=list(rubric.steps),
         bands=[ScoreBand(low=lo, high=hi, outcome=outcome) for lo, hi, outcome in rubric.bands],
@@ -249,7 +277,7 @@ def evaluate(req: EvaluateRequest, x_judge_api_key: str | None = Header(default=
     log.info(
         "eval_ok kind=%s backend=%s judge=%s rubric=%s@%s score=%.2f success=%s integrity=%s signals=%d "
         "latency_ms=%d source_chars=%d answer_chars=%d",
-        req.kind, req.backend, JUDGE_MODEL, rubric.id, rubric.version, response.score, response.success,
+        req.kind, req.backend, judge_model, rubric.id, rubric.version, response.score, response.success,
         integrity.status, len(integrity.signals), latency, len(req.context or ""), len(req.actual_output),
     )
     return response

@@ -3,16 +3,16 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { runEvaluation } from "@/lib/eval/client";
 import { EVAL_KINDS } from "@/lib/eval/kinds";
-import { describeHealth } from "@/lib/eval/health";
+import { describeHealth, judgeKeyAvailable } from "@/lib/eval/health";
 import { describeIntegrity } from "@/lib/eval/integrity";
 import { shouldAutoEvaluate } from "@/lib/eval/auto";
 import { savedJudgeKey } from "@/lib/eval/client";
 import { evalStore, type Backend, type StoredEvaluation } from "@/lib/eval/store";
-import { autoEvaluateEnabled } from "@/lib/settings";
+import { autoEvaluateEnabled, describeJudge, loadSettings } from "@/lib/settings";
 import { useIsRendered } from "@/lib/useIsRendered";
 import { renderBold } from "@/lib/renderBold";
 import { activityLog, formatElapsed } from "@/lib/activity/log";
-import { bandFor, describeMatchup } from "@/lib/compare/performance";
+import { bandFor, compareScores, describeMatchup } from "@/lib/compare/performance";
 import { fmtUsd } from "@/lib/compare/pricing";
 import { useEvalHealth } from "@/lib/eval/useEvalHealth";
 import { JUDGE_FAILURE_TITLES } from "@/lib/eval/serviceError";
@@ -36,38 +36,10 @@ function scoreTone(score: number, threshold: number): Tone {
   return score >= Math.max(0.8, threshold) ? "emerald" : score >= threshold ? "amber" : "rose";
 }
 
-/** One standardized message row: a small labelled icon beside the message body. */
-function Message({ icon, label, tone = "neutral", children }: { icon: IconName; label: string; tone?: "neutral" | "warn" | "error"; children: ReactNode }) {
-  const styles =
-    tone === "warn"
-      ? "border-amber-600/30 bg-amber-600/[0.08] text-amber-900"
-      : tone === "error"
-        ? "border-rose-600/30 bg-rose-600/[0.06] text-rose-900"
-        : "border-border bg-elevated/70 text-secondary";
-  return (
-    <div className={`flex gap-2.5 rounded-lg border px-3 py-2.5 ${styles}`}>
-      <Icon name={icon} size={16} className="mt-0.5" />
-      <div className="min-w-0 flex-1">
-        <p className="text-[11px] font-bold uppercase tracking-wide opacity-80">{label}</p>
-        <div className="mt-0.5 text-sm leading-relaxed">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-lg bg-elevated px-2 py-1.5">
-      <dt className="truncate text-[11px] font-bold uppercase tracking-wide text-muted">{label}</dt>
-      <dd className="mt-0.5 font-bold tabular-nums text-foreground">{value}</dd>
-    </div>
-  );
-}
-
 function Disclosure({ summary, children }: { summary: string; children: ReactNode }) {
   return (
     <details className="group rounded-lg border border-border bg-surface">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wide text-muted transition-colors hover:text-deep">
+      <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wide text-muted transition-colors hover:text-deep">
         {summary}
         <Icon name="chevron" size={14} className="transition-transform group-open:rotate-180" />
       </summary>
@@ -76,129 +48,51 @@ function Disclosure({ summary, children }: { summary: string; children: ReactNod
   );
 }
 
-function CardShell({ name, badge, children }: { name: string; badge?: ReactNode; children: ReactNode }) {
+/** What the judge was shown: the request, the answer under evaluation, and the source text (or how much of it). */
+function SawContent({ packet }: { packet: EvalPacket }) {
   return (
-    <section aria-label={`${name} evaluation`} className="min-w-0 space-y-3 rounded-xl border border-border bg-surface p-3.5">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-bold uppercase tracking-wide text-muted">{name}</h3>
-        {badge}
-      </div>
-      {children}
-    </section>
+    <>
+      <p className="mb-1 font-bold text-deep">Request</p>
+      <pre className="mb-2 whitespace-pre-wrap font-sans">{packet.input}</pre>
+      <p className="mb-1 font-bold text-deep">Answer under evaluation</p>
+      <pre className="mb-2 whitespace-pre-wrap font-sans">{renderBold(packet.actualOutput)}</pre>
+      <p className="font-bold text-deep">Source text</p>
+      {packet.context ? (
+        <>
+          <p className="mb-1 text-muted">
+            {packet.context.length.toLocaleString()} characters, passed as fenced, untrusted data. Both backends are judged against this
+            same source text; only the answer differs.
+          </p>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border border-border bg-elevated/60 p-2 font-sans" tabIndex={0}>
+            {packet.context}
+          </pre>
+        </>
+      ) : (
+        <p>None.</p>
+      )}
+    </>
   );
 }
 
-function ResultCard({ name, result, packet }: { name: string; result: EvalResult; packet: EvalPacket }) {
-  const tone = scoreTone(result.score, result.threshold);
-  const t = TONE[tone];
-  const integrity = describeIntegrity(result);
-  const score = Math.round(result.score * 100);
-  const band = bandFor(result);
+function BandsContent({ result, band }: { result: EvalResult; band: ReturnType<typeof bandFor> }) {
   return (
-    <CardShell
-      name={name}
-      badge={
-        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-bold ${t.chip}`}>
-          <Icon name={result.success ? "check" : "x"} size={12} />
-          {result.success ? "Pass" : "Fail"}
-        </span>
-      }
-    >
-      {/* Metrics */}
-      <div>
-        <div className="flex items-baseline justify-between gap-3">
-          <span className={`text-3xl font-extrabold tabular-nums tracking-tight ${t.text}`}>
-            {score}
-            <span className="text-lg">%</span>
-          </span>
-          <span className="text-xs text-muted">pass at {Math.round(result.threshold * 100)}%</span>
-        </div>
-        <div
-          className="relative mt-1.5 h-1.5 w-full rounded-full bg-border"
-          role="meter"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={score}
-          aria-label={`${name} evaluation score`}
-        >
-          <div className={`h-full rounded-full ${t.bar}`} style={{ width: `${score}%` }} />
-          <div className="absolute -top-0.5 h-2.5 w-0.5 rounded bg-deep/60" style={{ left: `${result.threshold * 100}%` }} aria-hidden />
-        </div>
-        <p className="mt-1.5 text-xs text-muted">
-          {result.judgeModel} · rubric {result.rubric.id} v{result.rubric.version}
-        </p>
-        <dl className="mt-2 grid grid-cols-3 gap-2 text-xs">
-          <Metric label="Judge score" value={`${Math.round(result.score * 10)}/10`} />
-          <Metric label="Judge time" value={formatElapsed(result.latencyMs)} />
-          <Metric label="Judge cost" value={result.judgeCostUsd != null ? fmtUsd(result.judgeCostUsd) : "n/a"} />
-        </dl>
-      </div>
-
-      {/* Messages */}
-      <div className="space-y-2">
-        <Message icon="chat" label="Judge's verdict">
-          {result.reason}
-        </Message>
-        {band && (
-          <Message icon="info" label={`What ${band.points}/10 means`}>
-            Band {band.low}&ndash;{band.high}: {band.outcome}
-          </Message>
-        )}
-        {integrity && (
-          <Message icon="alert" label="Untrusted content detected" tone="warn">
-            {integrity}
-          </Message>
-        )}
-        <Disclosure summary="What the judge saw">
-          <p className="mb-1 font-bold text-deep">Request</p>
-          <pre className="mb-2 whitespace-pre-wrap font-sans">{packet.input}</pre>
-          <p className="mb-1 font-bold text-deep">Answer under evaluation</p>
-          <pre className="mb-2 whitespace-pre-wrap font-sans">{renderBold(packet.actualOutput)}</pre>
-          <p className="font-bold text-deep">Source text</p>
-          {packet.context ? (
-            <>
-              <p className="mb-1 text-muted">
-                {packet.context.length.toLocaleString()} characters, passed as fenced, untrusted data. Both backends are judged against this
-                same source text; only the answer differs.
-              </p>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border border-border bg-elevated/60 p-2 font-sans" tabIndex={0}>
-                {packet.context}
-              </pre>
-            </>
-          ) : (
-            <p>None.</p>
-          )}
-        </Disclosure>
-        {result.bands.length > 0 && (
-          <Disclosure summary="Score bands for this rubric">
-            <ul className="space-y-1.5">
-              {result.bands.map((b) => (
-                <li key={b.low} className={b === band ? "font-bold text-deep" : undefined}>
-                  <span className="tabular-nums">{b.low}&ndash;{b.high}</span>: {b.outcome}
-                </li>
-              ))}
-            </ul>
-          </Disclosure>
-        )}
-        <Disclosure summary={`How it was judged (${result.steps.length} steps)`}>
-          <ol className="list-decimal space-y-1.5 pl-4">
-            {result.steps.map((step, i) => (
-              <li key={i}>{step}</li>
-            ))}
-          </ol>
-        </Disclosure>
-      </div>
-    </CardShell>
+    <ul className="space-y-1.5">
+      {result.bands.map((b) => (
+        <li key={b.low} className={band && b.low === band.low ? "font-bold text-deep" : undefined}>
+          <span className="tabular-nums">{b.low}&ndash;{b.high}</span>: {b.outcome}
+        </li>
+      ))}
+    </ul>
   );
 }
 
-function StatusCard({ name, icon, tone, title, children }: { name: string; icon: IconName; tone: "neutral" | "warn" | "error"; title: string; children: ReactNode }) {
+function StepsContent({ result }: { result: EvalResult }) {
   return (
-    <CardShell name={name}>
-      <Message icon={icon} label={title} tone={tone}>
-        {children}
-      </Message>
-    </CardShell>
+    <ol className="list-decimal space-y-1.5 pl-4">
+      {result.steps.map((step, i) => (
+        <li key={i}>{step}</li>
+      ))}
+    </ol>
   );
 }
 
@@ -212,58 +106,168 @@ interface Side {
   skipReason: string | null;
 }
 
-function SideCard({ side, stored, sig, serviceDown }: { side: Side; stored: StoredEvaluation | undefined; sig: string; serviceDown: boolean }) {
-  if (side.skipReason) {
-    return (
-      <StatusCard name={side.name} icon="info" tone="neutral" title="Not evaluated">
-        {side.skipReason}
-      </StatusCard>
-    );
-  }
-  if (!side.packet) {
-    return (
-      <StatusCard name={side.name} icon="info" tone="neutral" title="Nothing to evaluate">
-        {side.emptyReason ?? "No answer from this backend yet."}
-      </StatusCard>
-    );
-  }
+/** What one model's evaluation slot has to say right now: a score, or the reason there isn't one. Both layouts render this, so they cannot disagree. */
+type SideView =
+  | { kind: "status"; icon: IconName; tone: "neutral" | "warn" | "error"; title: string; body: ReactNode }
+  | { kind: "result"; result: EvalResult; packet: EvalPacket };
+
+function viewOf(side: Side, stored: StoredEvaluation | undefined, sig: string, serviceDown: boolean): SideView {
+  if (side.skipReason) return { kind: "status", icon: "info", tone: "neutral", title: "Not evaluated", body: side.skipReason };
+  if (!side.packet) return { kind: "status", icon: "info", tone: "neutral", title: "Nothing to evaluate", body: side.emptyReason ?? "No answer from this backend yet." };
   // The service being down is said once, in the status line above, with the command to fix it. The cards stay calm.
-  if (serviceDown) {
-    return (
-      <StatusCard name={side.name} icon="info" tone="neutral" title="Waiting for the evaluation service">
-        This answer will be evaluated once the service is running.
-      </StatusCard>
-    );
-  }
+  if (serviceDown) return { kind: "status", icon: "info", tone: "neutral", title: "Waiting for the evaluation service", body: "This answer will be evaluated once the service is running." };
   const current = stored && stored.sig === sig ? stored : undefined;
-  if (current?.pending) {
-    return (
-      <StatusCard name={side.name} icon="loader" tone="neutral" title="Judging">
-        The judge is re-deriving the answer from the source text&hellip;
-      </StatusCard>
-    );
-  }
+  if (current?.pending) return { kind: "status", icon: "loader", tone: "neutral", title: "Judging", body: "The judge is re-deriving the answer from the source text\u2026" };
   if (!current?.outcome) {
-    return (
-      <StatusCard name={side.name} icon="info" tone="neutral" title={stored ? "Answer changed" : "Not evaluated yet"}>
-        {stored ? "This answer changed since it was last evaluated. Re-evaluate to score the current answer." : "Select Evaluate to score this answer."}
-      </StatusCard>
-    );
+    return {
+      kind: "status",
+      icon: "info",
+      tone: "neutral",
+      title: stored ? "Answer changed" : "Not evaluated yet",
+      body: stored ? "This answer changed since it was last evaluated. Re-evaluate to score the current answer." : "Select Evaluate to score this answer.",
+    };
   }
   const { outcome } = current;
   if (!outcome.ok) {
-    return outcome.reason === "not_configured" ? (
-      <StatusCard name={side.name} icon="alert" tone="warn" title="Judge not configured">
-        {outcome.message ?? "The evaluation service isn't configured."}
-      </StatusCard>
-    ) : (
-      <StatusCard name={side.name} icon="alert" tone="error" title={(outcome.code && JUDGE_FAILURE_TITLES[outcome.code]) || "Judge call failed"}>
-        {outcome.message ?? "The judge call failed."}
-        {outcome.code && <span className="mt-1 block font-mono text-[11px] opacity-90">{outcome.code}</span>}
-      </StatusCard>
-    );
+    return outcome.reason === "not_configured"
+      ? { kind: "status", icon: "alert", tone: "warn", title: "Judge not configured", body: outcome.message ?? "The evaluation service isn't configured." }
+      : {
+          kind: "status",
+          icon: "alert",
+          tone: "error",
+          title: (outcome.code && JUDGE_FAILURE_TITLES[outcome.code]) || "Judge call failed",
+          body: (
+            <>
+              {outcome.message ?? "The judge call failed."}
+              {outcome.code && <span className="mt-1 block font-mono text-[11px] opacity-90">{outcome.code}</span>}
+            </>
+          ),
+        };
   }
-  return <ResultCard name={side.name} result={outcome.result} packet={side.packet} />;
+  return { kind: "result", result: outcome.result, packet: side.packet };
+}
+
+/**
+ * The evaluation layout, the same on every tab: one row per model in a single table (score, result, judge time and cost), the judge's verdict on the
+ * line beneath, and everything longer (what the judge saw, bands, steps) in one disclosure below. It says the same things as
+ * the full cards, in a fraction of the space.
+ */
+function CompactSides({ sides, stored, sigOf, serviceDown }: { sides: Side[]; stored: Partial<Record<Backend, StoredEvaluation>>; sigOf: (s: Side) => string; serviceDown: boolean }) {
+  const views = sides.map((side) => ({ side, view: viewOf(side, stored[side.backend], sigOf(side), serviceDown) }));
+  const results = views.filter((v): v is { side: Side; view: Extract<SideView, { kind: "result" }> } => v.view.kind === "result");
+  return (
+    <div className="space-y-2">
+      <div className="overflow-x-auto rounded-lg border border-border bg-surface">
+        <table aria-label="Evaluation scores" className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="border-b border-border bg-elevated text-left text-[11px] font-bold uppercase tracking-wide text-muted">
+              <th scope="col" className="px-2.5 py-1.5">Model</th>
+              <th scope="col" className="px-2 py-1.5">Score</th>
+              <th scope="col" className="px-2 py-1.5">Result</th>
+              <th scope="col" className="px-2 py-1.5">Judge time</th>
+              <th scope="col" className="px-2 py-1.5">Judge cost</th>
+            </tr>
+          </thead>
+          {views.map(({ side, view }) => (
+            <tbody key={side.backend} aria-label={`${side.name} evaluation`} className="border-t border-border/60 first:border-t-0">
+              {view.kind === "result" ? (
+                <CompactResultRows name={side.name} result={view.result} />
+              ) : (
+                <tr>
+                  <th scope="row" className="px-2.5 py-2 text-left align-top font-bold text-foreground">{side.name}</th>
+                  <td colSpan={4} className={`px-2 py-2 ${view.tone === "error" ? "text-rose-900" : view.tone === "warn" ? "text-amber-900" : "text-secondary"}`}>
+                    <span className="inline-flex items-start gap-1.5">
+                      <Icon name={view.icon} size={13} className="mt-0.5" />
+                      <span>
+                        <span className="font-bold">{view.title}. </span>
+                        {view.body}
+                      </span>
+                    </span>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          ))}
+        </table>
+      </div>
+      {results.length > 0 && (
+        <Disclosure summary="Judge details: what it saw, score bands and steps">
+          <div className="space-y-4">
+            {results.map(({ side, view }) => (
+              <div key={side.backend}>
+                <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">
+                  {side.name} &middot; {view.result.judgeModel} &middot; rubric {view.result.rubric.id} v{view.result.rubric.version}
+                </p>
+                <SawContent packet={view.packet} />
+                {view.result.bands.length > 0 && (
+                  <>
+                    <p className="mb-1 mt-2 font-bold text-deep">Score bands</p>
+                    <BandsContent result={view.result} band={bandFor(view.result)} />
+                  </>
+                )}
+                <p className="mb-1 mt-2 font-bold text-deep">How it was judged ({view.result.steps.length} steps)</p>
+                <StepsContent result={view.result} />
+              </div>
+            ))}
+          </div>
+        </Disclosure>
+      )}
+    </div>
+  );
+}
+
+function CompactResultRows({ name, result }: { name: string; result: EvalResult }) {
+  const t = TONE[scoreTone(result.score, result.threshold)];
+  const integrity = describeIntegrity(result);
+  const score = Math.round(result.score * 100);
+  const band = bandFor(result);
+  return (
+    <>
+      <tr className="align-top">
+        <th scope="row" className="px-2.5 pt-2 text-left font-bold text-foreground">{name}</th>
+        <td className="px-2 pt-2">
+          <span className={`text-sm font-extrabold tabular-nums ${t.text}`}>{score}%</span>
+          <span
+            className="relative mt-1 block h-1 w-16 rounded-full bg-border"
+            role="meter"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={score}
+            aria-label={`${name} evaluation score`}
+          >
+            <span className={`block h-full rounded-full ${t.bar}`} style={{ width: `${score}%` }} />
+            <span className="absolute -top-0.5 h-2 w-0.5 rounded bg-deep/60" style={{ left: `${result.threshold * 100}%` }} aria-hidden />
+          </span>
+        </td>
+        <td className="px-2 pt-2">
+          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-bold ${t.chip}`}>
+            <Icon name={result.success ? "check" : "x"} size={11} />
+            {result.success ? "Pass" : "Fail"}
+          </span>
+          <span className="mt-0.5 block text-[11px] text-muted">at {Math.round(result.threshold * 100)}%</span>
+        </td>
+        <td className="px-2 pt-2 tabular-nums text-secondary">{formatElapsed(result.latencyMs)}</td>
+        <td className="px-2 pt-2 tabular-nums text-secondary">{result.judgeCostUsd != null ? fmtUsd(result.judgeCostUsd) : "n/a"}</td>
+      </tr>
+      <tr>
+        <td colSpan={5} className="px-2.5 pb-2 pt-1 leading-relaxed text-secondary">
+          <span className="font-bold text-muted">Verdict: </span>
+          <span data-verdict>{result.reason}</span>
+          {band && (
+            <span className="mt-0.5 block text-muted">
+              {band.points}/10 &middot; band {band.low}&ndash;{band.high}: {band.outcome}
+            </span>
+          )}
+          {integrity && (
+            <span className="mt-1 flex items-start gap-1.5 rounded border border-amber-600/30 bg-amber-600/[0.08] px-2 py-1 text-amber-900">
+              <Icon name="alert" size={13} className="mt-0.5" />
+              <span>{integrity}</span>
+            </span>
+          )}
+        </td>
+      </tr>
+    </>
+  );
 }
 
 /**
@@ -305,7 +309,10 @@ export function EvaluationPanel({
   const [gaveUpWaiting, setGaveUpWaiting] = useState(false);
   const copy = EVAL_KINDS[kind];
   const { health, refresh } = useEvalHealth();
-  const status = health ? describeHealth(health, { savedKey: Boolean(savedJudgeKey()) }) : null;
+  // Who judges is whatever the Settings modal says: the saved OpenAI key by default, or the Claude, Gemini or OpenAI judge picked there.
+  const judgeChoice = describeJudge(loadSettings());
+  const hasSavedKey = Boolean(savedJudgeKey());
+  const status = health ? describeHealth(health, { savedKey: hasSavedKey, judge: judgeChoice }) : null;
 
   const sides: Side[] = [
     {
@@ -333,9 +340,10 @@ export function EvaluationPanel({
   const lastRunOffline = outcomes.some((o) => !o.ok && o.code === "service_offline");
 
   // One reading of the situation, so the button, the status line and the cards can never disagree.
-  const hasSavedKey = Boolean(savedJudgeKey());
   const serviceDown = health?.status === "offline" || lastRunOffline;
-  const keyMissing = health?.status === "judge_not_configured" && !hasSavedKey;
+  const keyMissing = health != null && health.status !== "offline" && !judgeKeyAvailable(health, judgeChoice.provider, hasSavedKey);
+  // For deciding whether to evaluate by itself: a chosen judge with no key is the same as no judge, whatever the service's OpenAI state says.
+  const autoHealth = health == null ? null : keyMissing ? ("judge_not_configured" as const) : health.status;
   const buttonLabel = serviceDown ? "Check again" : hasResult ? "Re-evaluate" : outcomes.length > 0 ? "Try again" : "Evaluate";
   const statusText = lastRunOffline && health?.status !== "offline" ? describeHealth({ status: "offline" }).text : status?.text;
 
@@ -384,7 +392,7 @@ export function EvaluationPanel({
     const go = shouldAutoEvaluate({
       enabled: autoEvaluateEnabled(),
       rendered,
-      health: health?.status ?? null,
+      health: autoHealth,
       hasSavedKey,
       alreadyAutoRan: evalStore.autoRanFor(scope),
       hasEntries: evalStore.hasAny(scope),
@@ -396,7 +404,6 @@ export function EvaluationPanel({
     startRun(true);
   });
 
-  const ranAutomatically = Object.values(stored).some((e) => e?.auto && e.outcome?.ok);
   // Both answers judged on the same request and sources: say which was better and by how much.
   const tsOutcome = stored.typesafe?.outcome;
   const oaOutcome = stored.openai?.outcome;
@@ -405,22 +412,20 @@ export function EvaluationPanel({
   const matchup =
     tsCurrent && oaCurrent && tsOutcome?.ok && oaOutcome?.ok
       ? (() => {
-          const delta = Math.round((tsOutcome.result.score - oaOutcome.result.score) * 100);
-          const winner = Math.abs(tsOutcome.result.score - oaOutcome.result.score) <= 0.03 ? ("tie" as const) : delta > 0 ? ("typesafe" as const) : ("openai" as const);
+          const { delta, winner } = compareScores(tsOutcome.result.score, oaOutcome.result.score);
           return { typesafe: tsOutcome.result, openai: oaOutcome.result, delta, winner };
         })()
       : null;
 
   return (
-    <section ref={sectionRef} aria-label={copy.title} className="space-y-3 rounded-xl border border-border bg-elevated/50 p-3.5">
+    <section ref={sectionRef} aria-label={copy.title} className="space-y-2 rounded-xl border border-border bg-elevated/50 p-3">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0 flex-1 basis-56">
-          <h2 className="flex items-center gap-2 text-sm font-extrabold text-deep">
+          <h2 className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-extrabold text-deep" title={copy.subtitle}>
             <Icon name="flask" size={16} />
             {copy.title}
             <span className="rounded border border-border-strong px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-muted">DeepEval G-Eval</span>
           </h2>
-          <p className="mt-1 text-xs leading-relaxed text-muted">{copy.subtitle}</p>
         </div>
         {runnable.length > 0 && (
           <RerunButton
@@ -428,7 +433,7 @@ export function EvaluationPanel({
             pending={anyPending}
             label={buttonLabel}
             disabled={keyMissing}
-            title={keyMissing ? "Save an OpenAI key in Settings, or set OPENAI_API_KEY for the evaluation service" : undefined}
+            title={keyMissing ? `Add a ${judgeChoice.label} key in Settings (${judgeChoice.provider === "openai" ? "or set OPENAI_API_KEY for the evaluation service" : "under Judge model"})` : undefined}
           />
         )}
       </div>
@@ -441,14 +446,8 @@ export function EvaluationPanel({
           {statusText}
         </p>
       )}
-      {ranAutomatically && (
-        <p className="text-xs font-semibold text-muted">Evaluated automatically the first time you opened this. Re-evaluate to run it again.</p>
-      )}
-      <p className="text-xs text-muted">
-        Independent LLM judge. Scores measure whether an answer is correct and supported by the text, not how confident the model was.
-      </p>
       {matchup && (
-        <p role="status" className="flex items-start gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-semibold text-foreground">
+        <p role="status" className="flex items-start gap-2 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs font-semibold text-foreground">
           <Icon name="scale" size={16} className="mt-0.5 shrink-0 text-deep" />
           <span>
             <span className="text-xs font-bold uppercase tracking-wide text-muted">Head to head </span>
@@ -456,11 +455,7 @@ export function EvaluationPanel({
           </span>
         </p>
       )}
-      <div className="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
-        {sides.map((side) => (
-          <SideCard key={side.backend} side={side} stored={stored[side.backend]} sig={sigOf(side)} serviceDown={serviceDown} />
-        ))}
-      </div>
+      <CompactSides sides={sides} stored={stored} sigOf={sigOf} serviceDown={serviceDown} />
     </section>
   );
 }

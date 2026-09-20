@@ -24,7 +24,6 @@ import os
 from pathlib import Path
 
 import pytest
-from deepeval import assert_test
 from deepeval.dataset import EvaluationDataset, Golden
 
 import guard
@@ -59,13 +58,13 @@ def test_judge_verdict_matches_the_known_answer(golden: Golden):
     test_case, _ = judge.prepare_case(rubric, golden.input, golden.actual_output, golden.context[0] if golden.context else None)
     metric = judge.build_metric(rubric, meta["backend"], judge.JUDGE_MODEL, judge.PASS_THRESHOLD)
 
-    # assert_test raises on a failing metric. Running it for every golden, expected-fail ones included,
-    # records the judge's real verdict and reason in DeepEval's run report either way.
-    try:
-        assert_test(test_case=test_case, metrics=[metric], run_async=False)
-        judged_pass = True
-    except AssertionError:
-        judged_pass = False
+    # Measure, then decide pass or fail the way the service does (judge.settle_score), not with assert_test: DeepEval compares
+    # its raw float to the threshold, which can fail a judge that chose exactly the pass mark. Running every golden, expected-fail
+    # ones included, still records the judge's real score and reason.
+    metric.measure(test_case)
+    settled = judge.settle_score(metric.score, judge.PASS_THRESHOLD)
+    assert settled is not None, f"[{meta['id']}] the judge returned an unusable score: {metric.score!r}"
+    judged_pass = settled[1]
 
     expected_pass = golden.expected_output == "pass"
     assert judged_pass == expected_pass, (

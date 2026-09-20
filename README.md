@@ -36,8 +36,11 @@ npm run eval-service:setup     # creates eval-service/.venv and installs its req
 ```
 
 After that `npm run meridian` starts the service alongside the app (`MERIDIAN_EVAL=0` skips it), or run it on its
-own with `npm run eval-service`. The judge uses the OpenAI key you save in Settings, or `OPENAI_API_KEY` for the
-service (see [`eval-service/README.md`](eval-service/README.md)). Without the service the app works as before; the
+own with `npm run eval-service`. By default the judge uses the OpenAI key you save in Settings (or `OPENAI_API_KEY` for the
+service); the **Judge model** section of the same dialog can switch it to Claude, Gemini or another OpenAI model, which is the
+recommended setup because a judge from a third company scores the two backends most fairly (see
+[`eval-service/README.md`](eval-service/README.md)). After pulling this change, run `npm run eval-service:setup` once and restart
+the service to pick up the Claude and Gemini SDKs. Without the service the app works as before; the
 evaluation panel says the service isn't running and offers **Check again**.
 
 **No API key is required to use the app.** Without `TYPESAFE_API_KEY` set, every call
@@ -129,15 +132,13 @@ view with axe. When editing a palette, run those two first.
    (liability, indemnification, termination), combined with weights that live in
    application code, not a prompt.
 7. Check **Compliance** — four plain yes/no flags with their own probabilities.
-8. Open **Citations** with a document loaded: it lists **suggested citations pulled from that document** (one per
-   recognisable clause type: renewal, indemnity, liability, termination, data, governing law and so on), each a typical claim
-   paired with the clause's own words. Clicking one runs the check against that clause. Then try the tab's playbook examples — an accurate citation, one that's quoted
-   correctly but contradicted by its own source, one that's real but doesn't actually
-   support the claim built on it, and one that's fabricated outright (never in the source
-   at all — caught with zero model calls, by string match alone).
-9. Try to paste something that looks like real client PII, or try to prompt-inject the
-   assistant ("ignore your instructions...") — both are caught by a guardrail skill that
-   runs on every turn, before anything else does.
+8. Open **Citations** with a document loaded: nothing to type or click. The document, or the passage you highlight, is read
+   automatically. Every reference the text makes (a cross-reference like "under Section 4", a legal citation, an attachment)
+   and every key term (renewal, liability cap, termination, governing law and so on) is pulled out with the clause quoted and
+   the figures extracted (`30 days`, `$50,000`, `no cap`, `termination fee`). References are checked against the section they
+   cite (one to a section that does not exist is a *broken reference*), and terms against the playbook (an essential term the
+   document lacks is *missing*). Both models judge every check in one batched request each, and the results sit in one table
+   near the top, with the independent judge scoring the check that matters most.
 
 Every one of the four tabs above shows TypeSafe's and OpenAI's answers to the same
 question side by side — there's no separate "Compare" destination. Each side is driven by
@@ -162,10 +163,28 @@ User message
 │  4. Confidence-gate: guardrails first, then intent routing,     │
 │     then a plain switch statement reads the answers it needs   │
 │     and ignores the rest                                       │
-│  5. Code composes the reply from template strings —             │
-│     the model never generates prose                             │
+│  5. Code composes the findings (risk, flags, routing), then a   │
+│     model writes the answer from the document and those        │
+│     findings (src/lib/chat/), or, with no key, the document's  │
+│     own clauses are quoted. TypeSafe never generates prose.    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### How the chat answers
+
+The typed judgments still decide everything structural: guardrails, intent, the risk score and the compliance flags. What
+changed is who writes the words. The answer writer ([`src/lib/chat/`](src/lib/chat/)) sends the loaded document, the last few
+turns and Meridian's own findings, as fixed facts to quote, to the OpenAI model chosen in the API Keys dialog. It is told to
+quote the clauses it relies on, to say so when the document is silent, and to answer general legal questions directly instead
+of refusing them. The document, the conversation and the message are fenced as untrusted data.
+
+- **No key saved:** nothing is faked. The reply quotes the clauses most relevant to the question with their section, and
+  says it is the document's own wording (`src/lib/chat/extractive.ts`).
+- **Refusals stay Meridian's.** A guardrail block (injection, privileged content) is never rewritten and makes no model call.
+- **Each backend gets its own answer**, written from its own judgments, so the comparison and the judge still see two
+  replies that differ only where the judgments do. The write is timed and priced as its own activity ("Answer writer"), never
+  as part of either backend's speed or cost.
+- Under each reply the chat says where it came from: which model wrote it, or that it is quoted from the document.
 
 ### The skills/plugin architecture
 
@@ -185,7 +204,7 @@ existing prompt is edited.
 | Contract Type | `contractType.ts` | Classifies a newly-loaded document once, then remembers it |
 | Clause Risk | `clauseRisk.ts` | Three independent Scores combined into a composite risk number |
 | Compliance Guard | `complianceGuard.ts` | Four independent yes/no compliance checks |
-| Citation Verifier | `citationVerifier.ts` | A deliberately *separate*, two-step flow — see below |
+| Citations | `src/lib/citations/` | Automatic extraction, then one batched relation check — see below |
 
 [`src/lib/orchestrator/excerpt.ts`](src/lib/orchestrator/excerpt.ts) reuses the exact same
 `RISK_DIMENSIONS` / `COMPLIANCE_CHECKS` question definitions from `clauseRisk.ts` /
@@ -204,19 +223,26 @@ in parallel against the same state) and the orchestrator simply ignores the answ
 doesn't end up needing. The Trace tab visualizes exactly this: unused answers are shown,
 dimmed, rather than hidden, specifically to make this pattern legible.
 
-Citation verification is the one deliberate exception
-([`src/lib/skills/citationVerifier.ts`](src/lib/skills/citationVerifier.ts)): code has to
-locate which source section a quote came from *before* it can ask whether that section
-supports the claim, so it's a real two-step, code-gated sequence — a plain substring
-match (free, instant), then one `Choice` question only for quotes that survive it. This
-mirrors [the citation-check cookbook](https://docs.typesafe.ai/cookbooks/citation_check)
-and is called out in the docs as the correct exception, not the default.
+Citation checking is the one deliberate exception to the single fan-out call
+([`src/lib/citations/`](src/lib/citations/)): code has to find WHAT to check, and which text each claim is judged against,
+*before* it can ask a model anything, so it is a real two-step, code-gated sequence. This mirrors
+[the citation-check cookbook](https://docs.typesafe.ai/cookbooks/citation_check) and is called out in the docs as the
+correct exception, not the default.
 
-The loaded document is a citation source alongside the playbook: its clauses are split
-([`src/lib/citations/sections.ts`](src/lib/citations/sections.ts)) and keyed `Doc §N` (`Doc ¶N` for text without numbering),
-so a quote taken from it is located and judged against that clause. The suggestions
-([`suggest.ts`](src/lib/citations/suggest.ts)) are computed locally with keyword rules, with no model call and no cost until you
-click one; each quote is a verbatim slice of its clause, which a test asserts for every sample contract.
+1. **Extract, by rule, no model** ([`extract.ts`](src/lib/citations/extract.ts), [`topics.ts`](src/lib/citations/topics.ts)).
+   The text is split into clauses ([`sections.ts`](src/lib/citations/sections.ts), `Doc §N`, or `Doc ¶N` for text without
+   numbering). Two kinds of check come out. A *reference* is a citation the text itself makes: an internal cross-reference
+   is resolved to the section it cites (a reference to one that does not exist is a broken reference, decided by rule), and
+   legal citations and attachments are named and marked not checkable here. A *term* is a key topic: the clause that covers it
+   is chosen, quoted verbatim, and its figures pulled out, to be checked against the playbook's expectation. An essential
+   term with no clause is reported missing, but only for text that reads as a contract. A highlighted passage is read on its
+   own, with its references still resolved against the whole document.
+2. **Judge, in one request per backend** ([`batch.ts`](src/lib/citations/batch.ts), `POST /api/citations`). Every check that a
+   model should judge becomes one three-way `Choice` (supports, contradicts, says nothing) over its own claim and source, so
+   a whole document costs one call to TypeSafe and one to OpenAI. Checks decided by rule never leave the app.
+
+Results are kept for the session ([`store.ts`](src/lib/citations/store.ts)) so switching tabs costs nothing, and each read text
+runs once. The playbook (`src/lib/data/authorities.ts`) is fictional and stands in for a real internal one.
 
 ### Conversational context / memory
 
@@ -351,9 +377,11 @@ assertions rather than eyeballing in the UI:
 - **Composite risk scoring** (`src/lib/skills/clauseRisk.ts`) — the 0.5/0.3/0.2 weighting
   is exercised at both the safest and riskiest ends, and a missing dimension correctly
   returns `null` rather than a partial score.
-- **The citation locate step** (`src/lib/skills/citationVerifier.ts`) — found, missing,
-  and section-only-with-no-quote all resolve correctly, with zero model calls in the
-  missing case.
+- **Citation extraction** (`src/lib/citations/`) — every key term is found in every sample contract with its clause and
+  figures, a missing essential term is reported only for text that reads as a contract, a legal citation's numbers are never
+  mistaken for sections, a reference to a section that does not exist is a broken reference, and a highlighted passage
+  resolves its references against the whole document. The batch of checks is built, sent and read back the same way for both
+  backends.
 - **Excerpt scoring** (`src/lib/orchestrator/excerpt.ts`) — the same question set and
   0.55 compliance threshold as the whole-document path, just scoped to a smaller state.
 - **Pricing, comparison-schema translation, and cross-backend agreement** (`src/lib/compare/*`)
@@ -368,6 +396,10 @@ assertions rather than eyeballing in the UI:
 `npm run test:e2e:report` checks **Download report** end to end: it populates Risk, Compliance and Citations through the real UI with the
 judge and OpenAI simulated at known scores, downloads the web page, PDF, Word and Markdown files, and checks their tables, explanations,
 characters, page layout and the menu's accessibility. Files and screenshots are written to `reports/` (gitignored). It needs no API keys.
+`npm run test:e2e:citations` checks the Citations tab end to end: a document is read and checked with no click and one batched
+request per backend, results survive a tab switch, a highlighted passage is read on its own, references and attachments are
+found and classified, a text with nothing to check makes no model call, and the tab works on a phone and passes the accessibility scan.
+It needs no API keys.
 `npm run check:report -- <file>` validates a report you downloaded from your own session (.html, .pdf, .docx or .md): it is complete, the
 table agrees with the scoring sections, pass/fail agrees with the threshold and the band agrees with the score. It needs no keys and no
 running app, so a report produced by the real judge, with the keys saved in the Settings modal, can be checked directly.
@@ -391,9 +423,12 @@ in an interview rather than pretending otherwise:
   load balancer or multiple instances, this needs Redis or DynamoDB — the module's three
   exported functions are the only integration surface, so it's a contained change.
 - **Citation retrieval.** `AUTHORITY_SECTIONS` is a hardcoded object standing in for a
-  real corpus. A production version would embed the corpus into a vector store (pgvector,
-  OpenSearch, Pinecone) and replace the substring `locate()` step with a similarity search
-  — the "ask TypeSafe whether the retrieved context supports the claim" step is unchanged.
+  real playbook, and the clause for each key term is chosen by keyword rules
+  (`src/lib/citations/topics.ts`). A production version would embed the playbook and the
+  document's clauses into a vector store (pgvector, OpenSearch, Pinecone) and choose them by
+  similarity, and would resolve outside citations (statutes, cases) against a real
+  corpus instead of marking them not checkable. The "ask TypeSafe whether the retrieved
+  context supports the claim" step is unchanged.
 - **Cloud deployment.** This app is plain Next.js (App Router, API routes) with no
   platform-specific code, so it runs on Vercel as-is. For AWS/Azure: the same Next.js
   build runs on AWS App Runner, ECS Fargate, or Azure Container Apps behind a standard

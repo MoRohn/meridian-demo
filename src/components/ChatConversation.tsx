@@ -2,11 +2,14 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { PillButton } from "./PillButton";
-import { renderBold } from "@/lib/renderBold";
+import { ChatText } from "./ChatText";
 
 export interface ChatMessage {
   role: "user" | "assistant";
   text: string;
+  /** Where an assistant reply came from ("Written by gpt-4o from the document and TypeSafe's findings"), and a caution if the model that should have written it could not. */
+  via?: string | null;
+  note?: string | null;
 }
 
 /**
@@ -28,7 +31,7 @@ const SUGGESTIONS: Suggestion[] = [
   { label: "Analyze this contract", excerptAction: "analyze", scope: "risk" },
   { label: "Check compliance", excerptAction: "compliance", scope: "compliance" },
   { label: "Summarize this context" },
-  { label: "Verify a citation" },
+  { label: "Check citations" },
 ];
 
 export function ChatConversation({
@@ -69,9 +72,16 @@ export function ChatConversation({
     return (
       <div className="flex flex-col border-t border-border bg-surface p-3">
         {last && (
-          <p className="mb-2 max-h-24 overflow-y-auto text-xs leading-relaxed text-muted">
-            <span className="font-bold text-secondary">{last.role === "user" ? "You" : "Meridian"}:</span> {last.text}
-          </p>
+          <div role="region" aria-label="Latest reply" tabIndex={0} className="mb-2 max-h-36 overflow-y-auto rounded text-xs leading-relaxed text-muted outline-none focus-visible:ring-2 focus-visible:ring-deep/50">
+            <span className="font-bold text-secondary">{last.role === "user" ? "You" : "Meridian"}:</span>{" "}
+            {last.role === "assistant" ? <ChatText text={last.text} /> : last.text}
+            {last.role === "assistant" && (last.via || last.note) && (
+              <p className="mt-1 text-[11px] leading-snug">
+                {last.via}
+                {last.note && <span className={`${last.via ? "block " : ""}font-semibold text-amber-800`}>{last.note}</span>}
+              </p>
+            )}
+          </div>
         )}
         <form onSubmit={submit} className="flex gap-2">
           <input
@@ -105,14 +115,22 @@ export function ChatConversation({
                 M
               </div>
             )}
-            <div
-              className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-base font-medium leading-relaxed shadow-sm ${
-                m.role === "user"
-                  ? "rounded-br-sm bg-fill text-on-fill"
-                  : "rounded-bl-sm border border-border bg-surface text-foreground"
-              }`}
-            >
-              {m.role === "assistant" ? renderBold(m.text) : m.text}
+            <div className="flex min-w-0 max-w-[82%] flex-col">
+              <div
+                className={`rounded-2xl px-3.5 py-2.5 text-base font-medium leading-relaxed shadow-sm ${
+                  m.role === "user"
+                    ? "rounded-br-sm bg-fill text-on-fill"
+                    : "rounded-bl-sm border border-border bg-surface text-foreground"
+                }`}
+              >
+                {m.role === "assistant" ? <ChatText text={m.text} /> : m.text}
+              </div>
+              {m.role === "assistant" && (m.via || m.note) && (
+                <p className="mt-1 px-1 text-[11px] leading-snug text-muted">
+                  {m.via}
+                  {m.note && <span className={`${m.via ? "block " : ""}font-semibold text-amber-800`}>{m.note}</span>}
+                </p>
+              )}
             </div>
           </div>
         ))}

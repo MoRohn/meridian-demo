@@ -7,7 +7,8 @@ import { getOrCreateSession, resetSession } from "@/lib/memory/session";
 import { loadDocument } from "@/lib/orchestrator/state";
 
 const runMock = vi.fn();
-vi.mock("@/lib/openai/client", () => ({
+vi.mock("@/lib/openai/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/openai/client")>()), // the writer shares the real client's model helpers
   runOpenAIEquivalent: (...args: unknown[]) => runMock(...args),
   isOpenAIConfigured: () => true,
 }));
@@ -56,13 +57,47 @@ describe("POST /api/compare-openai: OpenAI's own reply", () => {
   });
 
   it("composes from the session as it was when the request began, even if the chat turn appends history while OpenAI is thinking", async () => {
-    runMock.mockImplementation(async (_state, questions) => {
-      const s = getOrCreateSession("sess");
-      s.history.push({ role: "user", text: "Summarize this context" }, { role: "assistant", text: "the TypeSafe reply landed first" }); // the racing chat request
-      return outcomeFor(questions, { ...ANALYZE, intent: "summarize_context" });
-    });
-    const data = await (await post({ sessionId: "sess", message: "Summarize this context" })).json();
-    expect(data.turn.reply).toContain("This session has 0 prior messages");
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ model: "gpt-4o", choices: [{ message: { content: "A written answer." } }], usage: { prompt_tokens: 5, completion_tokens: 5 } }), text: async () => "" });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      runMock.mockImplementation(async (_state, questions) => {
+        const s = getOrCreateSession("sess");
+        s.history.push({ role: "user", text: "Summarize this context" }, { role: "assistant", text: "the TypeSafe reply landed first" }); // the racing chat request
+        return outcomeFor(questions, { ...ANALYZE, intent: "summarize_context" });
+      });
+      const data = await (await post({ sessionId: "sess", message: "Summarize this context", override: { apiKey: "k", model: "gpt-4o" } })).json();
+      const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[1].content as string;
+      expect(prompt).not.toContain("the TypeSafe reply landed first"); // the writer saw the session as the questions did
+      expect(prompt).toContain("Summarize this context"); // ...and the message under discussion
+      expect(data.turn.reply).toBe("A written answer.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("has a model write OpenAI's reply from OpenAI's own findings, and reports how it was produced", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ model: "gpt-4o", choices: [{ message: { content: "It is high risk because of the uncapped liability." } }], usage: { prompt_tokens: 900, completion_tokens: 40 } }), text: async () => "" });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      runMock.mockImplementation(async (_state, questions) => outcomeFor(questions, ANALYZE));
+      const data = await (await post({ sessionId: "sess", message: "Analyze this contract", override: { apiKey: "k", model: "gpt-4o" } })).json();
+      expect(data.turn.reply).toBe("It is high risk because of the uncapped liability.");
+      expect(data.turn.answer).toMatchObject({ source: "model", model: "gpt-4o", usage: { input_tokens: 900, output_tokens: 40 } });
+      const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[1].content as string;
+      expect(prompt).toContain("Overall risk: 100%"); // OpenAI's judgments, not TypeSafe's
+      expect(prompt).not.toMatch(/FLAGGED \(\d+%\)/); // OpenAI has no calibrated probability to quote
+      expect(data.turn.risk.overall).toBe(1); // the structured findings are unchanged
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("with no key, quotes the document for an open question instead of refusing", async () => {
+    delete process.env.OPENAI_API_KEY;
+    runMock.mockImplementation(async (_state, questions) => outcomeFor(questions, { ...ANALYZE, intent: "ask_legal_question" }));
+    const data = await (await post({ sessionId: "sess", message: "Can I terminate early?" })).json();
+    expect(data.turn.answer).toEqual({ source: "document" });
+    expect(data.turn.reply).toContain("Section 6: Termination");
   });
 
   it("never changes the session: the chat request owns the conversation", async () => {

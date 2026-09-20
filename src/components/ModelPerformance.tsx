@@ -150,8 +150,9 @@ const ACTOR: Record<ActivityRecord["actor"], { name: string; dot: string }> = {
   typesafe: { name: "TypeSafe", dot: "bg-deep" },
   openai: { name: "OpenAI", dot: "bg-violet-500" },
   judge: { name: "Judge", dot: "bg-amber-600" },
+  writer: { name: "Answer writer", dot: "bg-sky-600" },
 };
-const KIND_LABEL: Record<ActivityRecord["kind"], string> = { chat: "Chat", excerpt: "Excerpt", citation: "Citation", evaluation: "Evaluation" };
+const KIND_LABEL: Record<ActivityRecord["kind"], string> = { chat: "Chat", excerpt: "Excerpt", citation: "Citation", evaluation: "Evaluation", answer: "Answer" };
 const VISIBLE = 8;
 
 function ActivityRow({ record, now }: { record: ActivityRecord; now: number }) {

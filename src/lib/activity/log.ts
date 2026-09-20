@@ -8,8 +8,9 @@
  *
  * Kept outside React (like the evaluation store) so it outlives tab switches; components subscribe to it.
  */
-export type ActivityActor = "typesafe" | "openai" | "judge";
-export type ActivityKind = "chat" | "excerpt" | "citation" | "evaluation";
+/** `writer` is the model that writes chat answers. It is its own actor so its time and cost never count towards either backend's figures. */
+export type ActivityActor = "typesafe" | "openai" | "judge" | "writer";
+export type ActivityKind = "chat" | "excerpt" | "citation" | "evaluation" | "answer";
 export type ActivityState = "pending" | "done" | "error";
 
 export interface ActivityRecord {

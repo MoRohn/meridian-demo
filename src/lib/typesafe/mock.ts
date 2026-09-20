@@ -142,15 +142,72 @@ function confidenceFromDistribution(probs: number[]): number {
 // with noise unrelated to whether a claim is actually being negated.
 const NEGATION_RE = /\b(not|never|cannot)\b/i;
 
+const DAYS: Record<string, number> = { day: 1, week: 7, month: 30, year: 365 };
+
+/** Every duration in a text, in days: "thirty (30) days" is 30, "eighteen (18) months" is 540. */
+function durationsInDays(text: string): { days: number; unit: string }[] {
+  return [...text.matchAll(/(\d+)\)?[\s-]+(day|week|month|year)s?\b/gi)].map((m) => ({ days: Number(m[1]) * DAYS[m[2].toLowerCase()], unit: m[2].toLowerCase() }));
+}
+
+/**
+ * A bag-of-words overlap cannot see that "capped at a stated amount" and "shall not be limited" are opposites, or that 18
+ * months is more than "no more than 90 days". These few literal rules cover the claims the Citations tab makes about the
+ * sample contracts' terms; like the compliance tables below, they are demo-specific patches to a fallback path. The live
+ * model reads for meaning and needs none of them. Returns null when no rule applies and the generic scorer should decide.
+ */
+function ruleRelation(claim: string, section: string): "contradicts" | "says_nothing" | null {
+  const c = claim.toLowerCase();
+  const t = section.toLowerCase();
+  if (/\bcapped\b|stated amount/.test(c) && /shall not be limited|not be limited|unlimited|no (?:limit|cap)\b/.test(t)) return "contradicts";
+  if (/without a termination fee|no penalty|without penalty/.test(c) && /termination fee|early termination|penalty/.test(t)) return "contradicts";
+  if (/\bmutual\b|own breaches/.test(c) && /\b(?:customer|provider|employee|company|vendor|supplier)\b[^.]{0,150}shall indemnify/.test(t) && !/each party|either party|mutual/.test(t)) return "contradicts";
+  if (/limited in (?:both )?duration and geography/.test(c) && /anywhere in the world|worldwide/.test(t)) return "contradicts";
+  const atMost = c.match(/(?:no more than|at most)[^.]{0,20}?\((\d+)\)\s*(day|week|month|year)/);
+  if (atMost) {
+    const limit = Number(atMost[1]) * DAYS[atMost[2]];
+    const found = durationsInDays(t);
+    if (found.length === 0) return "says_nothing";
+    if (found.some((d) => d.days > limit)) return "contradicts";
+  }
+  const atLeast = c.match(/at least[^.]{0,20}?\((\d+)\)\s*(day|week|month|year)/);
+  if (atLeast) {
+    const floor = Number(atLeast[1]) * DAYS[atLeast[2]];
+    const notice = durationsInDays(t).filter((d) => d.unit === "day" || d.unit === "week"); // a term of a year is not a notice period
+    if (notice.length === 0) return "says_nothing";
+    if (notice.some((d) => d.days < floor)) return "contradicts";
+  }
+  if (/security/.test(c) && /breach notification/.test(c) && !/security|safeguard|breach/.test(t)) return "says_nothing";
+  return null;
+}
+
 function mockRelation(claim: string, section: string): ChoiceAnswer {
+  const ruled = ruleRelation(claim, section);
+  if (ruled) {
+    const confidence = ruled === "contradicts" ? 0.82 : 0.7;
+    const rest = (1 - confidence) / 2;
+    const probabilities: Record<string, number> = { supports: rest, contradicts: rest, says_nothing: rest };
+    probabilities[ruled] = confidence;
+    return { type: "choice", choice: ruled, probabilities, confidence };
+  }
   const claimWords = new Set(tokenize(claim).filter((w) => !STOPWORDS.has(w)));
   const sectionWords = new Set(tokenize(section).filter((w) => !STOPWORDS.has(w)));
   let overlap = 0;
   for (const w of claimWords) if (sectionWords.has(w)) overlap += 1;
   const overlapRatio = claimWords.size > 0 ? overlap / claimWords.size : 0;
 
+  // Negation is compared where the claim and the section actually meet: in the section's best-matching sentence, not anywhere
+  // in it. A clause that says "does not automatically renew" elsewhere says nothing against a claim about how long its
+  // confidentiality lasts.
+  const sentences = section.split(/(?<=[.;])\s+/).filter(Boolean);
+  const meets = (s: string) => {
+    const words = new Set(tokenize(s).filter((w) => !STOPWORDS.has(w)));
+    let hits = 0;
+    for (const w of claimWords) if (words.has(w)) hits += 1;
+    return hits;
+  };
+  const best = sentences.reduce((a, b) => (meets(b) > meets(a) ? b : a), sentences[0] ?? section);
   const claimHasNegation = NEGATION_RE.test(claim);
-  const sectionHasNegation = NEGATION_RE.test(section);
+  const sectionHasNegation = NEGATION_RE.test(best);
 
   let choice: "supports" | "contradicts" | "says_nothing";
   let confidence: number;
@@ -176,6 +233,39 @@ function mockRelation(claim: string, section: string): ChoiceAnswer {
     probabilities,
     confidence: Math.round(confidence * 1000) / 1000,
   };
+}
+
+/**
+ * A keyword-overlap score cannot tell "Can I terminate early?" (a question about the contract) from "analyze this contract"
+ * (a task): both talk about the contract. Reading the message's own shape can, cheaply and literally: a clear task word
+ * routes to that task, a plain question routes to open Q&A, and a greeting to small talk. Anything else returns null and
+ * the generic scorer decides, as before. Like the compliance tables below this is demo-specific patching of a fallback
+ * path; the live model reads for meaning.
+ */
+const INTENT_RULES: [string, RegExp][] = [
+  ["verify_citation", /\b(citation|cite|cited|quote|quoted|verif\w*|authority|precedent|case law)\b/i],
+  ["summarize_context", /\b(summari[sz]e|summary|recap|overview|so far|tl;?dr|what have we)\b/i],
+  ["check_compliance", /\b(complian\w*|flags?|gdpr|regulat\w*)\b/i],
+  ["analyze_contract", /\b(analy[sz]e|analysis|review|risk\w*|scor(e|ing)|assess\w*|evaluate|red flags?|safe to sign)\b/i],
+];
+const QUESTION_SHAPE = /\?\s*$|^\s*(can|could|what|how|does|do|is|are|why|who|when|where|should|will|would|may|explain|tell me|describe|define)\b/i;
+const GREETING = /^\s*(hi|hello|hey|thanks|thank you|thx|good (morning|afternoon|evening)|ok|okay|cheers)\b/i;
+
+export function intentFromMessage(message: string): string | null {
+  for (const [intent, pattern] of INTENT_RULES) if (pattern.test(message)) return intent;
+  if (GREETING.test(message) && !QUESTION_SHAPE.test(message)) return "small_talk";
+  if (QUESTION_SHAPE.test(message)) return "ask_legal_question";
+  return null;
+}
+
+function mockIntent(q: ChoiceQuestionSpec, message: string): ChoiceAnswer | null {
+  const options = Object.keys(q.criteria);
+  const chosen = intentFromMessage(message);
+  if (!chosen || !options.includes(chosen)) return null;
+  const rest = 0.18 / (options.length - 1);
+  const probabilities: Record<string, number> = {};
+  for (const o of options) probabilities[o] = o === chosen ? 0.82 : Math.round(rest * 1000) / 1000;
+  return { type: "choice", choice: chosen, probabilities, confidence: Math.round(confidenceFromDistribution(options.map((o) => probabilities[o])) * 1000) / 1000 };
 }
 
 function mockChoice(id: string, q: ChoiceQuestionSpec, stateText: string): ChoiceAnswer {
@@ -277,11 +367,21 @@ export function mockSystemOne(
   const fullStateText = flatten(state as JsonValue);
   const answers: Record<string, Answer> = {};
   for (const [id, q] of Object.entries(questions)) {
-    if (id === "relation" && q.type === "choice" && "supports" in q.criteria && "contradicts" in q.criteria) {
-      const claim = flatten(resolvePath(state as JsonValue, "claim"));
-      const section = flatten(resolvePath(state as JsonValue, "source_section"));
-      answers[id] = mockRelation(claim, section);
+    if (q.type === "choice" && "supports" in q.criteria && "contradicts" in q.criteria) {
+      // A citation check's relation question names its own claim and source by path, one pair per question, so a whole
+      // document's checks can share one request: `checks.<id>.claim` and `checks.<id>.source_section`.
+      const refs = [...flatten(q.instructions).matchAll(/`([a-zA-Z0-9_.[\]]+)`/g)].map((m) => m[1]);
+      const claimRef = refs.find((r) => r.endsWith("claim")) ?? "claim";
+      const sectionRef = refs.find((r) => r.endsWith("source_section")) ?? "source_section";
+      answers[id] = mockRelation(flatten(resolvePath(state as JsonValue, claimRef)), flatten(resolvePath(state as JsonValue, sectionRef)));
       continue;
+    }
+    if (id === "intent" && q.type === "choice" && "analyze_contract" in q.criteria && "small_talk" in q.criteria) {
+      const byShape = mockIntent(q, flatten(resolvePath(state as JsonValue, "latest_message")));
+      if (byShape) {
+        answers[id] = byShape;
+        continue;
+      }
     }
     const stateText = scopedStateText(q.instructions, state as JsonValue);
     if (q.type === "choice") answers[id] = mockChoice(id, q, stateText);

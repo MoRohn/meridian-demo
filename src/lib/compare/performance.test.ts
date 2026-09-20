@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { activityLog, type ActivityFinish } from "../activity/log";
 import type { StoredEvaluationRow } from "../eval/store";
 import type { EvalResult } from "../eval/types";
-import { bandFor, compareBackends, describeMatchup, latencyStats, matchups, performanceVerdict, summarizeBackend } from "./performance";
+import { bandFor, compareBackends, compareScores, describeMatchup, latencyStats, matchups, performanceVerdict, summarizeBackend, TIE_POINTS } from "./performance";
 
 beforeEach(() => activityLog.reset());
 
@@ -144,5 +144,37 @@ describe("bandFor", () => {
   });
   it("is null when the service sent no bands", () => {
     expect(bandFor({ ...result(0.8), bands: [] })).toBeNull();
+  });
+});
+
+
+describe("compareScores: head to head on whole points", () => {
+  it("calls scores within 3 points level, exactly as the text says, even where the float difference is a hair over 0.03", () => {
+    expect(compareScores(0.63, 0.6)).toEqual({ delta: 3, winner: "tie" });
+    expect(compareScores(0.57, 0.6)).toEqual({ delta: -3, winner: "tie" });
+    expect(compareScores(0.64, 0.6)).toEqual({ delta: 4, winner: "typesafe" });
+    expect(compareScores(0.56, 0.6)).toEqual({ delta: -4, winner: "openai" });
+  });
+
+  it("agrees with a plain whole-point comparison for every possible pair of displayed scores", () => {
+    for (let a = 0; a <= 100; a++) {
+      for (let b = 0; b <= 100; b++) {
+        const { delta, winner } = compareScores(a / 100, b / 100);
+        expect(delta).toBe(a - b);
+        expect(winner).toBe(Math.abs(a - b) <= TIE_POINTS ? "tie" : a > b ? "typesafe" : "openai");
+      }
+    }
+  });
+
+  it("is used by the same-action matchup, so 63% vs 60% is level and says so", () => {
+    const [m] = matchups([row("risk", "typesafe", 0.63), row("risk", "openai", 0.6)]);
+    expect(m.winner).toBe("tie");
+    expect(describeMatchup(m)).toContain("within 3 points");
+  });
+
+  it("is the same call the quality comparison makes", () => {
+    const ts = summarizeBackend("typesafe", [], [row("risk", "typesafe", 0.63)]);
+    const oa = summarizeBackend("openai", [], [row("risk", "openai", 0.6)]);
+    expect(compareBackends(ts, oa).find((d) => d.id === "quality")?.edge).toBe("tie");
   });
 });

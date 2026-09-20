@@ -18,12 +18,12 @@ export interface ComplianceFlag {
  * so TypeSafe's reply and OpenAI's reply (built from OpenAI's answers to the same questions) come out of identical
  * logic and differ only where the backends' judgments differ.
  */
-const INTENT_CONFIDENCE_FLOOR = 0.35;
+export const INTENT_CONFIDENCE_FLOOR = 0.35;
 const CONTRACT_TYPE_CONFIDENCE_FLOOR = 0.4;
 const GUARDRAIL_TRIGGER = 0.6;
 const COMPLIANCE_FLAG_THRESHOLD = 0.55;
 
-function buildComplianceFlags(answers: Record<string, Answer>): ComplianceFlag[] {
+export function buildComplianceFlags(answers: Record<string, Answer>): ComplianceFlag[] {
   return (Object.keys(COMPLIANCE_CHECKS) as ComplianceCheckId[])
     .filter((id) => answers[id]?.type === "noul")
     .map((id) => {
@@ -196,10 +196,12 @@ export function composeTurn(session: SessionState, answers: Record<string, Answe
           break;
         }
         case "verify_citation":
-          reply =
-            "Head to the Citation Verifier tab — paste the claim and the quote you want checked, and I'll locate it in the " +
-            "reference source and judge whether the surrounding context actually supports the claim, rather than just " +
-            "confirming the words appear somewhere.";
+          reply = session.activeDocument
+            ? "Open the Citations tab. It reads this document, or the passage you highlight, and checks it automatically: every " +
+              "reference the text makes against the section it cites, and each key term (renewal, liability, termination and so on) " +
+              "against what the playbook expects, with the clause quoted and the figures pulled out."
+            : "Load a document first, then open the Citations tab. It reads the document, or a passage you highlight, and checks " +
+              "every reference in it against the section it cites, and its key terms against the playbook, automatically.";
           break;
         case "summarize_context":
           reply = composeSummary(session);

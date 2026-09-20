@@ -18,7 +18,7 @@ describe("runEvaluation and the saved OpenAI key", () => {
     const f = stubBrowser({ openaiApiKey: "  sk-saved-0123456789abcdef  ", openaiModel: "gpt-6-astra", typesafeApiKey: "ts-key-should-not-travel-000" });
     await runEvaluation(REQUEST);
     const body = sent(f);
-    expect(body.override).toEqual({ apiKey: "sk-saved-0123456789abcdef" });
+    expect(body.override).toEqual({ provider: "openai", apiKey: "sk-saved-0123456789abcdef" });
     expect(JSON.stringify(body)).not.toContain("gpt-6-astra");
     expect(JSON.stringify(body)).not.toContain("ts-key-should-not-travel");
   });
@@ -30,6 +30,13 @@ describe("runEvaluation and the saved OpenAI key", () => {
       expect("override" in sent(f)).toBe(false);
       vi.unstubAllGlobals();
     }
+  });
+
+  it("sends the chosen Claude judge with its own key and model, and never the OpenAI key", async () => {
+    const f = stubBrowser({ openaiApiKey: "sk-openai-must-not-travel-000", judgeProvider: "anthropic", judgeModel: "claude-sonnet-5", judgeApiKey: "sk-ant-api03-judge-key-000000" });
+    await runEvaluation(REQUEST);
+    expect(sent(f).override).toEqual({ provider: "anthropic", model: "claude-sonnet-5", apiKey: "sk-ant-api03-judge-key-000000" });
+    expect(JSON.stringify(sent(f))).not.toContain("sk-openai-must-not-travel");
   });
 
   it("reports the saved key to the UI without exposing it elsewhere", () => {

@@ -6,13 +6,15 @@ import { ChatConversation, type ChatMessage } from "@/components/ChatConversatio
 import { MobileNav, type MobileView } from "@/components/MobileNav";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { evalStore } from "@/lib/eval/store";
+import { citationStore } from "@/lib/citations/store";
 import { buildReportDoc, reportFilename } from "@/lib/report/buildReport";
 import type { ReportFormat } from "@/lib/report/doc";
 import { renderReport } from "@/lib/report/formats";
 import { downloadBlob } from "@/lib/report/download";
 import { AppHeader } from "@/components/AppHeader";
 import { activityLog, type ActivityFinish, type ActivityKind } from "@/lib/activity/log";
-import { openaiActivityResult, typesafeActivityResult } from "@/lib/activity/outcomes";
+import { describeAnswer, openaiActivityResult, typesafeActivityResult, writerActivityResult } from "@/lib/activity/outcomes";
+import type { TurnAnswer } from "@/lib/chat/answer";
 import { Workspace, type WorkspaceTab } from "@/components/Workspace";
 import { ReasoningTrace } from "@/components/ReasoningTrace";
 import { RiskDashboard } from "@/components/RiskDashboard";
@@ -21,7 +23,6 @@ import { CitationVerifier } from "@/components/CitationVerifier";
 import type { TraceEntry, ComplianceFlag, ContextStats } from "@/lib/orchestrator/run";
 import { ContextMeter, type BackendContextMetrics } from "@/components/ContextMeter";
 import type { CompositeRisk } from "@/lib/skills/clauseRisk";
-import type { CitationCheckResult } from "@/lib/skills/citationVerifier";
 import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
 import { CONTRACT_TYPES } from "@/lib/skills/contractType";
 import { TYPESAFE_PRICING, usdForTokens, type SessionTotals } from "@/lib/compare/pricing";
@@ -126,6 +127,17 @@ export default function Home() {
     activityLog.finish(id, result);
   }
 
+  /**
+   * A model-written answer is its own activity, timed and priced apart from the backend whose findings it was written
+   * from, so neither TypeSafe's nor OpenAI's speed and cost figures ever include the writing.
+   */
+  function logWrittenAnswer(answer: TurnAnswer | null | undefined, backendName: string) {
+    const finished = writerActivityResult(answer);
+    if (!finished) return;
+    const id = activityLog.begin("writer", "answer", `Answer from ${backendName}'s findings`, Date.now() - (answer?.elapsedMs ?? 0));
+    activityLog.finish(id, finished);
+  }
+
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -221,8 +233,11 @@ export default function Home() {
           usage: { input_tokens: number; output_tokens: number };
           elapsedMs: number;
           context: ContextStats;
+          answer: TurnAnswer;
         };
-        setMessages((m) => [...m, { role: "assistant", text: result.reply }]);
+        const { via, note } = describeAnswer(result.answer, "TypeSafe");
+        setMessages((m) => [...m, { role: "assistant", text: result.reply, via, note }]);
+        logWrittenAnswer(result.answer, "TypeSafe");
         setLastReply(result.reply);
         setTrace(result.trace);
         setTraceSource(result.source);
@@ -279,6 +294,7 @@ export default function Home() {
               setOpenaiOutcome(outcome);
               setOpenaiTurn(data.turn ?? null);
               finishOpenaiActivity(oaEpoch, openaiActivityResult(outcome));
+              logWrittenAnswer(data.turn?.answer, "OpenAI");
               if (outcome?.ok) {
                 const result = outcome.result;
                 setOpenaiMetrics({
@@ -516,6 +532,7 @@ export default function Home() {
       setOpenaiOutcome(null);
       setOpenaiTurn(null);
       evalStore.reset(); // a new session gets its first-time evaluations again
+      citationStore.reset();
       setLastMessage(null);
       setLastReply(null);
       setContextStats(null);
@@ -540,33 +557,9 @@ export default function Home() {
     }
   }
 
-  async function handleVerifyCitation(claim: string, quote: string | null, sectionId?: string): Promise<CitationCheckResult> {
-    const data = await callApi({
-      action: "verify_citation",
-      sessionId,
-      claim,
-      quote,
-      sectionId,
-      typesafeOverride: tsOverride,
-      openaiOverride: oaOverride,
-    });
-    const result = data.result as CitationCheckResult;
-    // A fabricated quote never reaches a model (status "missing") — nothing
-    // was actually measured, so leave whatever's currently displayed alone
-    // rather than overwriting it with a misleading all-zero reading.
-    if (result.status !== "missing") {
-      setTypesafeMetrics({
-        task: "Citation check",
-        inputBytes: result.inputBytes,
-        inputTokens: result.usage.input_tokens,
-        outputTokens: result.usage.output_tokens,
-      });
-    }
-    return result;
-  }
-
-  function handleCitationOpenaiMetrics(metrics: BackendContextMetrics) {
-    setOpenaiMetrics(metrics);
+  function handleCitationMetrics(actor: "typesafe" | "openai", metrics: BackendContextMetrics) {
+    if (actor === "typesafe") setTypesafeMetrics(metrics);
+    else setOpenaiMetrics(metrics);
   }
 
   const contractTypeLabel = useMemo(() => {
@@ -715,18 +708,19 @@ export default function Home() {
                 ),
                 citation: (
                   <CitationVerifier
-                    sessionId={sessionId}
+                    documentKey={activeDocument?.id}
                     documentName={activeDocument?.name}
                     documentText={activeDocument?.text}
-                    onVerify={handleVerifyCitation}
+                    selectedExcerpt={selectedExcerpt}
                     openaiConfigured={openaiConfigured}
+                    typesafeOverride={tsOverride}
+                    openaiOverride={oaOverride}
                     onBeginTypesafeActivity={beginTypesafeActivity}
                     onFinishTypesafeActivity={finishTypesafeActivity}
                     onBeginOpenaiActivity={beginOpenaiActivity}
                     onFinishOpenaiActivity={finishOpenaiActivity}
-                    openaiOverride={oaOverride}
-                    selectedExcerpt={selectedExcerpt}
-                    onOpenaiMetrics={handleCitationOpenaiMetrics}
+                    onTypesafeMetrics={(m) => handleCitationMetrics("typesafe", m)}
+                    onOpenaiMetrics={(m) => handleCitationMetrics("openai", m)}
                   />
                 ),
               }}

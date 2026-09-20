@@ -91,7 +91,18 @@ async function simulate(page) {
   await page.route("**/api/compare-openai", (route) =>
     route.fulfill({ json: { outcome: openaiOutcome(openaiAnswers), turn: { reply: "OpenAI's reply: the contract is high risk.", intent: { choice: "analyze_contract", confidence: 0.8 }, risk: null, complianceFlags: [], blocked: null } } }),
   );
-  await page.route("**/api/compare-openai-citation", (route) => route.fulfill({ json: { outcome: openaiOutcome({ relation: { value: "supports", selfReportedConfidence: 0.9 } }) } }));
+  // Citations: TypeSafe's batch is answered by the app itself (reported as live so it is judged); OpenAI's is simulated.
+  await page.route("**/api/citations", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.backend === "typesafe") {
+      const res = await route.fetch();
+      const data = await res.json();
+      if (data.ok) data.source = "live";
+      return route.fulfill({ response: res, json: data });
+    }
+    const judged = Object.fromEntries(body.checks.map((c) => [c.id, { relation: "contradicts", verdict: "contradicted", confidence: 0.9, basis: "self-reported" }]));
+    return route.fulfill({ json: { ok: true, judged, model: "gpt-5", source: "live", elapsedMs: 3100, usage: { input_tokens: 800, output_tokens: 60 }, inputBytes: 2000 } });
+  });
 }
 
 // ---- drive the app --------------------------------------------------------
@@ -116,10 +127,11 @@ await page.getByText("SaaS Master Services Agreement", { exact: false }).first()
 async function readEvaluations(activity) {
   const found = [];
   for (const model of ["TypeSafe", "OpenAI"]) {
-    const card = page.locator(`section[aria-label="${model} evaluation"]`).first();
+    // A card on the Risk, Compliance and Citations tabs, or a table row group on the Trace tab: both carry this label.
+    const card = page.locator(`[aria-label="${model} evaluation"]`).first();
     if (!(await card.count()) || !(await card.locator("[role=meter]").count())) continue;
     const score = Number(await card.locator("[role=meter]").first().getAttribute("aria-valuenow"));
-    const reason = (await card.getByText("Judge's verdict").locator("xpath=following-sibling::div").first().innerText()).trim();
+    const reason = (await card.locator("[data-verdict]").first().innerText()).trim();
     found.push({ activity, model, score, reason });
   }
   return found;
@@ -127,12 +139,20 @@ async function readEvaluations(activity) {
 const onScreen = [];
 for (const [tab, activity] of [["Risk", "Risk score"], ["Compliance", "Compliance flags"], ["Citations", "Citation verdict"], ["Trace", "Assistant reply"]]) {
   await page.getByRole("tab", { name: new RegExp(`^${tab}`) }).click().catch(() => page.getByRole("button", { name: new RegExp(`^${tab}`) }).first().click());
-  if (tab === "Citations") await page.getByRole("button", { name: /^Check .* citation from / }).first().click();
-  await page.getByText("Judge's verdict").first().waitFor({ timeout: WAIT }).catch(() => {});
+  await page.locator("[data-verdict]").first().waitFor({ timeout: WAIT }).catch(() => {});
   // Both backends' judge calls have to land before the tab is read.
   await page.waitForFunction(() => !document.body.innerText.includes("The judge is re-deriving"), null, { timeout: WAIT }).catch(() => {});
   await page.waitForTimeout(2500);
   onScreen.push(...(await readEvaluations(activity)));
+
+  // Every results tab is drawn the same way: one comparison table (item, TypeSafe, OpenAI, match), then one evaluation table.
+  const panel = page.getByRole("tabpanel");
+  const headings = async (table) => (await table.locator("thead th").allInnerTexts()).map((t) => t.trim().toLowerCase());
+  const compare = await headings(panel.locator("table").first());
+  const firstColumn = { Risk: "rating", Compliance: "check", Citations: "check", Trace: "question" }[tab];
+  check(compare.join("|") === `${firstColumn}|typesafe|openai|match`, `${tab}: the results use the shared comparison table`, compare.join("|"));
+  check((await headings(panel.locator('table[aria-label="Evaluation scores"]'))).join("|") === "model|score|result|judge time|judge cost", `${tab}: the evaluation uses the shared score table`);
+  check((await panel.locator("table").count()) === 2, `${tab}: exactly the comparison and the evaluation, no leftover card layout`, String(await panel.locator("table").count()));
 }
 check(!(await menuButton.isDisabled()), "Download report is enabled once models have run");
 const kindsJudged = new Set(evaluated.map((e) => e.kind));

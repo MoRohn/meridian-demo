@@ -211,7 +211,7 @@ function scoringSections(evals: readonly StoredEvaluationRow[]): { blocks: Block
 
 // ---- trace ----------------------------------------------------------------
 
-const ACTOR_NAMES = { typesafe: "TypeSafe", openai: "OpenAI", judge: "Judge" } as const;
+const ACTOR_NAMES = { typesafe: "TypeSafe", openai: "OpenAI", judge: "Judge", writer: "Answer writer" } as const;
 
 function activityTrace(activities: readonly ActivityRecord[]): Block[] {
   if (activities.length === 0) return [para("No model calls have been made in this session.", undefined, "muted")];

@@ -4,6 +4,7 @@ import { buildStateJson, type SessionState, type TurnContext } from "./state";
 import type { CompositeRisk } from "../skills/clauseRisk";
 import type { Answer, QuestionSpec } from "../typesafe/types";
 import { composeTurn, type ComplianceFlag } from "./compose";
+import { writeReply, type TurnAnswer } from "../chat/answer";
 
 export interface TraceEntry {
   skill: string;
@@ -44,6 +45,8 @@ export interface TurnResult {
   usage: { input_tokens: number; output_tokens: number };
   elapsedMs: number;
   context: ContextStats;
+  /** Where `reply` came from: a model, the document's own clauses, or Meridian's templates. `elapsedMs` above is the Jev call only. */
+  answer: TurnAnswer;
 }
 
 export interface TurnRequest {
@@ -86,7 +89,7 @@ export function buildTurnRequest(session: SessionState, message: string): TurnRe
  * owns the conversation, exactly as recommended in
  * docs.typesafe.ai/concepts/how-to-build-with-system-one.
  */
-export async function handleTurn(session: SessionState, message: string, override?: KeyOverride): Promise<TurnResult> {
+export async function handleTurn(session: SessionState, message: string, override?: KeyOverride, writerOverride?: KeyOverride): Promise<TurnResult> {
   const { stateJson, questions, owner } = buildTurnRequest(session, message);
   const contextStats: ContextStats = {
     bytes: Buffer.byteLength(JSON.stringify(stateJson), "utf8"),
@@ -96,8 +99,13 @@ export async function handleTurn(session: SessionState, message: string, overrid
   };
   const response = await systemOne(stateJson, questions, override);
   const answers = response.answers;
-  const { reply, intent: intentSummary, risk, complianceFlags, blocked, used, contractType } = composeTurn(session, answers);
+  const composed = composeTurn(session, answers);
+  const { intent: intentSummary, risk, complianceFlags, blocked, used, contractType } = composed;
   if (contractType) session.contextFacts.contractType = contractType;
+
+  // The typed judgments decided what this turn is; a model then writes the answer from the document and those findings.
+  // It runs after the Jev call and is timed on its own, so TypeSafe's measured speed never includes it.
+  const { reply, answer } = await writeReply({ message, session, answers, composed, citeFlagProbability: true, override: writerOverride });
 
   session.history.push({ role: "user", text: message });
   session.history.push({ role: "assistant", text: reply });
@@ -121,5 +129,6 @@ export async function handleTurn(session: SessionState, message: string, overrid
     usage: response.usage,
     elapsedMs: response.elapsedMs,
     context: contextStats,
+    answer,
   };
 }

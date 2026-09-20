@@ -13,7 +13,8 @@ import re
 import threading
 
 # Anything shaped like a provider key, or an Authorization header value, is masked in text that may reach a reader.
-_KEY_SHAPED = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_\-*]{4,}|Bearer\s+\S+", re.IGNORECASE)
+# OpenAI and Anthropic keys start "sk-" (Anthropic's "sk-ant-"), Google's start "AIza".
+_KEY_SHAPED = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_\-*]{4,}|\bAIza[0-9A-Za-z_\-]{16,}|Bearer\s+\S+", re.IGNORECASE)
 
 
 # Keys currently in flight. Counted, because two concurrent requests may carry the same key.
@@ -50,9 +51,9 @@ def redact(text: str, secrets: tuple[str, ...] = ()) -> str:
 
 MESSAGES: dict[str, tuple[str, str]] = {
     "RateLimitError": ("judge_rate_limited", "The judge model is rate limited. Wait a few seconds and try again."),
-    "AuthenticationError": ("judge_auth", "The judge API key was rejected. Check OPENAI_API_KEY for the eval service."),
-    "PermissionDeniedError": ("judge_auth", "The judge API key was rejected. Check OPENAI_API_KEY for the eval service."),
-    "NotFoundError": ("judge_model_unavailable", "The judge model isn't available to this API key. Check EVAL_JUDGE_MODEL."),
+    "AuthenticationError": ("judge_auth", "The judge API key was rejected. Check the judge key saved in Meridian's Settings."),
+    "PermissionDeniedError": ("judge_auth", "The judge API key was rejected. Check the judge key saved in Meridian's Settings."),
+    "NotFoundError": ("judge_model_unavailable", "The judge model isn't available to this API key. Pick another judge model in Meridian's Settings."),
     "APIConnectionError": ("judge_unreachable", "Couldn't reach the judge model. Check the network and try again."),
     "APITimeoutError": ("judge_unreachable", "The judge model didn't answer in time. Try again."),
     "InternalServerError": ("judge_provider_error", "The judge provider returned an error. Try again shortly."),
@@ -71,12 +72,33 @@ def unwrap(exc: BaseException) -> BaseException:
     return exc
 
 
+def _by_http_status(status: int) -> tuple[str, str] | None:
+    """The same codes for a provider whose SDK reports a bare HTTP status (Google's ClientError and ServerError do)."""
+    if status in (401, 403):
+        return MESSAGES["AuthenticationError"]
+    if status == 404:
+        return MESSAGES["NotFoundError"]
+    if status == 429:
+        return MESSAGES["RateLimitError"]
+    if status >= 500:
+        return MESSAGES["InternalServerError"]
+    return None
+
+
 def explain(exc: BaseException, secrets: tuple[str, ...] = ()) -> tuple[str, str]:
     """(stable code, reader-facing message). `secrets` are masked wherever provider text is included."""
     inner = unwrap(exc)
     for cls in type(inner).__mro__:
         if cls.__name__ in MESSAGES:
             return MESSAGES[cls.__name__]
+    status = getattr(inner, "code", None)
+    if type(inner).__name__ in ("ClientError", "ServerError") and isinstance(status, int):
+        mapped = _by_http_status(status)
+        if mapped:
+            return mapped
+        # Google reports a rejected key as 400 "API key not valid", not 401.
+        if "api key" in str(inner).lower() and ("not valid" in str(inner).lower() or "invalid" in str(inner).lower()):
+            return MESSAGES["AuthenticationError"]
     if isinstance(inner, ValueError) and "invalid json" in str(inner).lower():
         return ("judge_bad_output", "The judge model returned an answer that couldn't be parsed. A stronger EVAL_JUDGE_MODEL usually fixes this.")
     return ("judge_error", redact(f"{type(inner).__name__}: {str(inner)[:200]}", secrets))
