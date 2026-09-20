@@ -435,6 +435,7 @@ export default function Home() {
         openaiOverride: oaOverride,
       });
       setActiveDocument(data.session.activeDocument);
+      setDocumentExpanded(true); // a document that has just been chosen or uploaded opens filling the left panel
       setContextFacts(data.session.contextFacts ?? {});
       setRisk(null);
       setComplianceFlags([]);
@@ -475,6 +476,7 @@ export default function Home() {
         openaiOverride: oaOverride,
       });
       setActiveDocument(data.session.activeDocument);
+      setDocumentExpanded(true); // a document that has just been chosen or uploaded opens filling the left panel
       setContextFacts(data.session.contextFacts ?? {});
       setRisk(null);
       setComplianceFlags([]);

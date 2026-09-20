@@ -36,6 +36,16 @@ for (const [name, [width, height]] of Object.entries(SIZES)) {
   await page.getByText("SaaS Master Services Agreement", { exact: false }).first().click();
   await page.waitForTimeout(2200);
 
+  // A chosen document opens at the compact 11px size everywhere; on desktop it also opens expanded, filling the left panel
+  // (the control then offers "Collapse"). Phones and tablets have no expand control at all.
+  const opened = await page.evaluate(() => {
+    const text = document.querySelector('[style*="font-size"]');
+    const toggle = [...document.querySelectorAll("button")].find((b) => ["Expand", "Collapse"].includes(b.textContent.trim()) && b.getBoundingClientRect().width > 0);
+    return { fontSize: text ? getComputedStyle(text).fontSize : null, toggle: toggle ? toggle.textContent.trim() : null };
+  });
+  check(opened.fontSize === "11px", `${name}: a chosen document opens at 11px`, String(opened.fontSize));
+  check(mobile ? opened.toggle === null : opened.toggle === "Collapse", `${name}: ${mobile ? "no expand control below the desktop breakpoint" : "a chosen document opens expanded"}`, String(opened.toggle));
+
   for (const view of mobile ? ["Document", "Assistant", "Analysis"] : [null]) {
     if (view) {
       await page.getByRole("button", { name: new RegExp("^" + view) }).click();

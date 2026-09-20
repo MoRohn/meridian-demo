@@ -96,13 +96,17 @@ export function DocumentPanel({
 
   // Resetting state when a prop changes, done during render (React's own
   // recommended pattern for this) rather than in an effect: a newly loaded
-  // document always opens as a small, scaled-down preview, and expanding
-  // bumps to a comfortable reading size — reading size is something the
-  // user opts into, not the default for a document they haven't looked at.
+  // document always opens at the compact PREVIEW_ZOOM size, whether or not the
+  // panel is expanded (a chosen document opens expanded, see page.tsx). Only a
+  // later Expand/Collapse click by the reader changes the size, bumping to a
+  // comfortable reading size: reading size is something the user opts into.
   const [prevDocId, setPrevDocId] = useState(document?.id ?? null);
   const [prevExpanded, setPrevExpanded] = useState(expanded);
   if ((document?.id ?? null) !== prevDocId) {
     setPrevDocId(document?.id ?? null);
+    // The panel is usually told to expand in the same update that loads the document; that is not the reader
+    // opting in, so it must not also count as an Expand click and bump the size.
+    setPrevExpanded(expanded);
     setZoom(PREVIEW_ZOOM);
     setCurrentPage(0);
   } else if (expanded !== prevExpanded) {
