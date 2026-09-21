@@ -151,7 +151,7 @@ for (const [tab, activity] of [["Risk", "Risk score"], ["Compliance", "Complianc
   const compare = await headings(panel.locator("table").first());
   const firstColumn = { Risk: "rating", Compliance: "check", Citations: "check", Trace: "question" }[tab];
   check(compare.join("|") === `${firstColumn}|typesafe|openai|match`, `${tab}: the results use the shared comparison table`, compare.join("|"));
-  check((await headings(panel.locator('table[aria-label="Evaluation scores"]'))).join("|") === "model|score|result|resp. time|resp. cost", `${tab}: the evaluation uses the shared score table`);
+  check((await headings(panel.locator('table[aria-label="Evaluation scores"]'))).join("|") === "model|score|result|total time|total cost", `${tab}: the evaluation uses the shared score table`);
   check((await panel.locator("table").count()) === 2, `${tab}: exactly the comparison and the evaluation, no leftover card layout`, String(await panel.locator("table").count()));
 }
 check(!(await menuButton.isDisabled()), "Download report is enabled once models have run");
@@ -203,7 +203,7 @@ const md = readFileSync(paths.md, "utf8");
 verify("md", md);
 const rows = md.split("\n").filter((l) => l.startsWith("| ")).map((l) => l.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim()));
 const header = rows.find((r) => r[0] === "Activity");
-check(Boolean(header) && header.length === 13, "md: the data table has 13 columns", String(header?.length));
+check(Boolean(header) && header.length === 16, "md: the data table has 16 columns", String(header?.length));
 const col = (n) => (header ? header.indexOf(n) : -1); // no table means no evaluation ran, already reported above
 for (const [activity, model, score, result] of DATA_ROWS) {
   const row = rows.find((r) => r[0] === activity && r[1] === "Whole document" && r[col("Model")] === model) ?? rows.find((r) => r[0] === activity && r[col("Model")] === model);
@@ -216,7 +216,8 @@ for (const [activity, model, score, result] of DATA_ROWS) {
   }
 }
 check(md.includes("**Head to head.** TypeSafe scored 40 points higher than OpenAI (90% vs 50%)"), "md: risk head-to-head matches the scores");
-check(md.includes("Suspicious"), "md: the integrity warning reaches the table");
+check(md.includes("an attempt to dictate the score") && md.includes("review this score manually"), "md: the integrity warning still reaches the per-model sections");
+check(!/\|\s*Integrity\s*\|/.test(md), "md: the table has no Integrity column");
 check(md.includes("café, Ω, Жук") && md.includes("日本語"), "md: non-Latin-1 text is intact");
 
 // Whatever the judge said, the report must say the same as the app: every score and explanation on screen is in the table and the explanations.

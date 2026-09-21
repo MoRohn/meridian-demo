@@ -107,9 +107,13 @@ The document, the conversation and the message are fenced as untrusted data.
   it is the document's own wording ([`extractive.ts`](../src/lib/chat/extractive.ts)).
 - **Refusals stay Meridian's.** A guardrail block (injection, privileged content) is never rewritten and makes no model call.
 - **Each backend gets its own answer**, written from its own judgments, so the comparison and the judge see two replies that
-  differ only where the judgments do. The write is timed and priced as its own activity ("Answer writer"), never as part of
-  either backend's speed or cost.
+  differ only where the judgments do. The write is timed and priced as its own activity ("Answer writer"), and each backend's
+  turn also records it as that backend's *LLM response*, so a backend's total cost is its reasoning calls plus the LLM response
+  that wrote its replies, shown with the reasoning cost and the LLM response cost beneath it.
 - Under each reply the chat says where it came from: which model wrote it, or that it is quoted from the document.
+- **Both replies are shown in the chat, in the order they finish.** Each backend's reply is its own card (TypeSafe or OpenAI)
+  with its finish place and time, appended the moment its request resolves; a card that is still waiting shows as
+  "answering…", and a failed backend gets a failure card instead of an answer. The input stays busy until both have settled.
 
 ## Conversational context
 
@@ -138,6 +142,13 @@ same moment**, for example `POST /api/chat` and `POST /api/compare-openai` for a
 server-side call. Each side updates the instant its own request resolves, regardless of the other's timing, success or
 failure.
 
+- **Three time metrics per chat turn, and only these.** *Model total time* is what the turn took from send to that backend's
+  reply landing (the whole time to answer). *Model reasoning* is the backend's own judgment call (Jev's judgments, OpenAI's
+  function call). *LLM response* is the model that writes the reply from those judgments, the same OpenAI model for both
+  backends (n/a when nothing wrote the reply, as with a refusal or a quoted answer). Total is reasoning plus response plus the
+  network. The chat card spells it out ("8.3s: 631ms model reasoning · 7.7s LLM response"); the header timer, activity trace,
+  evaluation table and Speed verdict all use model total time, from one shared clock; the Trace tab lists the median of each.
+  Header timers exist for TypeSafe and OpenAI only; judge calls are timed in the activity trace and the evaluation panel.
 - **Measure.** Each side shows real token usage, cost (TypeSafe's published pricing and OpenAI's list pricing, in
   [`src/lib/compare/pricing.ts`](../src/lib/compare/pricing.ts)) and latency, computed from the actual response.
 - **Monitor.** A running session total (calls, tokens, cumulative cost per backend) sits at the foot of the Trace tab. The

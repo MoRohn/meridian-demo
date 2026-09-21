@@ -1,4 +1,4 @@
-import { formatElapsed, type ActivityRecord } from "../activity/log";
+import { formatElapsed, shownElapsed, type ActivityRecord } from "../activity/log";
 import { BACKENDS, BACKEND_NAMES, bandFor, describeMatchup, matchups, type Backend } from "../compare/performance";
 import { fmtUsd } from "../compare/pricing";
 import { describeIntegrity } from "../eval/integrity";
@@ -98,24 +98,32 @@ function cellFor(evals: readonly StoredEvaluationRow[], scope: string, backend: 
 
 // ---- 1. the data table ---------------------------------------------------
 
-/** How long the answering model took to respond, from the call that produced the answer. n/a when nothing was measured. */
-const responseTime = (r: ResponseMetrics | null | undefined) => (r?.ms != null ? formatElapsed(r.ms) : NA);
-/** What that call was billed. n/a when nothing was measured; a call that really cost nothing is $0, not n/a. */
-const responseCost = (r: ResponseMetrics | null | undefined) => (r?.costUsd != null ? fmtUsd(r.costUsd) : NA);
+const time = (ms: number | null | undefined) => (ms != null ? formatElapsed(ms) : NA);
+/** n/a when nothing was measured; a call that really cost nothing is $0, not n/a. */
+const money = (usd: number | null | undefined) => (usd != null ? fmtUsd(usd) : NA);
+
+/** The answer's time and cost in one sentence, for the per-model sections: the totals, then what they are made of. */
+function responseSentence(r: ResponseMetrics | null | undefined): string {
+  const parts = (total: string, reasoning: string, writing: string) => `${total} (reasoning ${reasoning}${writing === NA ? "" : `, LLM response ${writing}`})`;
+  return `Model total time ${parts(time(r?.ms), time(r?.reasoningMs), time(r?.writingMs))}; total cost ${parts(money(r?.costUsd), money(r?.reasoningCostUsd), money(r?.writingCostUsd))}.`;
+}
 
 const COLUMNS = [
   "Activity",
   "Scope",
   "Model",
   "Status",
-  "Resp. time",
-  "Resp. cost",
+  "Model total time",
+  "Model reasoning",
+  "LLM response",
+  "Total cost",
+  "Cost for reasoning",
+  "Cost for LLM response",
   "Score",
   "Result",
   "Pass at",
   "Band (0-10)",
   "Rubric",
-  "Integrity",
   "Judge's explanation",
 ];
 
@@ -131,14 +139,17 @@ export function buildReportTable(evals: readonly StoredEvaluationRow[]): ReportT
         s.area,
         BACKEND_NAMES[backend],
         status,
-        responseTime(row?.response),
-        responseCost(row?.response),
+        time(row?.response?.ms),
+        time(row?.response?.reasoningMs),
+        time(row?.response?.writingMs),
+        money(row?.response?.costUsd),
+        money(row?.response?.reasoningCostUsd),
+        money(row?.response?.writingCostUsd),
         result ? pct(result.score) : NA,
         result ? (result.success ? "Pass" : "Fail") : NA,
         result ? pct(result.threshold) : NA,
         band ? `${band.low}-${band.high}` : NA,
         result ? `${result.rubric.id} v${result.rubric.version}` : NA,
-        result ? (result.integrity.status === "suspicious" ? "Suspicious" : "Clean") : NA,
         result ? result.reason : NA,
       ].map((v, i) => cell(v, i === COLUMNS.length - 1 ? REASON_MAX : CELL_MAX)));
     }
@@ -172,7 +183,7 @@ function surfaceSection(s: Surface, evals: readonly StoredEvaluationRow[], title
     }
     const r = c.result;
     const band = bandFor(r);
-    out.push(para(`Response time ${responseTime(c.row?.response)}, response cost ${responseCost(c.row?.response)}.`, `Score: ${pct(r.score)} (${Math.round(r.score * 10)}/10), ${r.success ? "Pass" : "Fail"}.`));
+    out.push(para(responseSentence(c.row?.response), `Score: ${pct(r.score)} (${Math.round(r.score * 10)}/10), ${r.success ? "Pass" : "Fail"}.`));
     out.push(para("", "Explanation."), { type: "quote", text: r.reason.trim() });
     if (band) out.push(para(`Band ${band.low}-${band.high}: ${band.outcome}`, `What ${band.points}/10 means.`));
     const integrity = describeIntegrity(r);
@@ -220,7 +231,7 @@ const ACTOR_NAMES = { typesafe: "TypeSafe", openai: "OpenAI", judge: "Judge", wr
 function activityTrace(activities: readonly ActivityRecord[]): Block[] {
   if (activities.length === 0) return [para("No model calls have been made in this session.", undefined, "muted")];
   const rows = activities.map((a, i) => {
-    const duration = a.status === "pending" ? "running" : formatElapsed(a.modelMs ?? Math.max(0, (a.endedAt ?? a.startedAt) - a.startedAt));
+    const duration = a.status === "pending" ? "running" : formatElapsed(shownElapsed(a, 0));
     const status = a.status === "error" ? "Failed" : a.status === "pending" ? "Running" : a.simulated ? "Simulated" : "Done";
     const tokens = a.inputTokens != null || a.outputTokens != null ? `${a.inputTokens ?? 0} / ${a.outputTokens ?? 0}` : NA;
     return [
@@ -286,7 +297,7 @@ export function buildReportDoc(input: ReportInput): ReportDoc {
     blocks.push(para("No evaluations have run yet. Analyze a contract, then open a tab to score it.", undefined, "muted"));
   } else {
     blocks.push({ type: "table", columns: table.columns, rows: table.rows });
-    blocks.push(para("Resp. time and Resp. cost are the answering model's own response time and billed cost for the call behind the answer, not the judge's. Score is the judge's 0-100% rating of how well the answer is supported by the source text: its confidence in the model's response. Pass at is the threshold for that rubric. Band is the 0-10 score band the score falls in (what that band means is spelled out below). Scores are comparable only within one rubric version. One call answers both Risk and Compliance, and one batched call answers every citation check, so those rows share their call's figures, and an Assistant reply adds the model that wrote it. n/a means no measured call.", undefined, "muted"));
+    blocks.push(para("The time and cost columns are for the answering model, not the judge. Model total time is what the answer took from send to landing; Model reasoning is the backend's own judgment call; LLM response is the model that wrote the reply (n/a when no model wrote the answer being judged). Total cost is the reasoning cost plus the LLM response cost, each priced from its measured tokens. Score is the judge's 0-100% rating of how well the answer is supported by the source text: its confidence in the model's response. Pass at is the threshold for that rubric. Band is the 0-10 score band the score falls in (what that band means is spelled out below). Scores are comparable only within one rubric version. One call answers both Risk and Compliance, and one batched call answers every citation check, so those rows share their call's figures; only an Assistant reply has an LLM response. n/a means no measured call.", undefined, "muted"));
   }
 
   const scoring = scoringSections(evals);

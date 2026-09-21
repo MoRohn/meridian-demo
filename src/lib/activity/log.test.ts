@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { activityLog, currentActivity, elapsedOf, formatElapsed } from "./log";
+import { activityLog, currentActivity, elapsedOf, formatElapsed, shownElapsed, wallOf } from "./log";
 
 beforeEach(() => activityLog.reset());
 
@@ -86,6 +86,25 @@ describe("elapsedOf", () => {
     const [ra, rb] = activityLog.list();
     expect(elapsedOf(ra, 99_999)).toBe(640);
     expect(elapsedOf(rb, 99_999)).toBe(1200);
+  });
+});
+
+describe("shownElapsed", () => {
+  it("shows a chat turn's whole time to answer, not just the backend's model call, and never jumps down when it ends", () => {
+    const id = activityLog.begin("typesafe", "chat", "x", 1000);
+    const running = activityLog.list().find((r) => r.id === id)!;
+    expect(shownElapsed(running, 14_000)).toBe(13_000);
+    activityLog.finish(id, { status: "done", modelMs: 766 }, 14_000);
+    const done = activityLog.list().find((r) => r.id === id)!;
+    expect(shownElapsed(done, 99_999)).toBe(13_000); // the chat card's number
+    expect(elapsedOf(done, 99_999)).toBe(766); // the backend's own model time, which the Speed comparison uses
+    expect(wallOf(done, 99_999)).toBe(13_000);
+  });
+
+  it("shows the model's own time for every other kind of call", () => {
+    const id = activityLog.begin("openai", "citation", "x", 0);
+    activityLog.finish(id, { status: "done", modelMs: 640 }, 900);
+    expect(shownElapsed(activityLog.list().find((r) => r.id === id)!, 0)).toBe(640);
   });
 });
 

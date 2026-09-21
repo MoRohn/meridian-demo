@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
-import { elapsedOf, formatElapsed, type ActivityRecord } from "@/lib/activity/log";
+import { formatElapsed, shownElapsed, type ActivityRecord } from "@/lib/activity/log";
 import { useActivities, useNow } from "@/lib/activity/hooks";
 import {
   BACKENDS,
@@ -49,12 +49,14 @@ function metricRows(ts: BackendPerformance, oa: BackendPerformance) {
   const both = (f: (p: BackendPerformance) => string): [string, string] => [f(ts), f(oa)];
   return [
     { label: "Calls (failed)", values: both((p) => `${p.calls} (${p.failures})`) },
-    { label: "Median time", values: both((p) => time(p.latency?.median)) },
-    { label: "Fastest / slowest", values: both((p) => (p.latency ? `${formatElapsed(p.latency.min)} / ${formatElapsed(p.latency.max)}` : "n/a")) },
-    { label: "Slowest 5% (p95)", values: both((p) => time(p.latency?.p95)) },
-    { label: "Input tokens", values: both((p) => count(p.inputTokens)) },
-    { label: "Output tokens", values: both((p) => count(p.outputTokens)) },
-    { label: "Total cost", values: both((p) => (p.calls > 0 ? fmtUsd(p.costUsd) : "n/a")) },
+    { label: "Model total time", values: both((p) => time(p.answerLatency?.median)) },
+    { label: "Model reasoning", values: both((p) => time(p.reasoningLatency?.median)) },
+    { label: "LLM response", values: both((p) => time(p.writingLatency?.median)) },
+    { label: "Input tokens (reasoning)", values: both((p) => count(p.inputTokens)) },
+    { label: "Output tokens (reasoning)", values: both((p) => count(p.outputTokens)) },
+    { label: "Total cost (reasoning + LLM response)", values: both((p) => (p.calls > 0 ? fmtUsd(p.costUsd) : "n/a")) },
+    { label: "Cost for reasoning", values: both((p) => (p.calls > 0 ? fmtUsd(p.reasoningCostUsd) : "n/a")) },
+    { label: "Cost for LLM response", values: both((p) => (p.writingCostUsd != null ? fmtUsd(p.writingCostUsd) : "n/a")) },
     { label: "Cost per passing answer", values: both((p) => (p.costPerPass != null ? fmtUsd(p.costPerPass) : "n/a")) },
     { label: "Answers judged", values: both((p) => String(p.quality.evaluated)) },
     { label: "Average judge score", values: both((p) => pct(p.quality.meanScore)) },
@@ -125,6 +127,13 @@ export function PerformancePanel() {
             />
           ))}
         </dl>
+        <p className="mt-2 border-t border-border/60 pt-2 text-xs leading-relaxed text-muted">
+          Median per chat turn. <strong className="text-secondary">Model total time</strong> is the whole time to answer, the figure the chat card and
+          header timer show. <strong className="text-secondary">Model reasoning</strong> is the backend&rsquo;s own judgment call.{" "}
+          <strong className="text-secondary">LLM response</strong> is the model that writes the reply, the same one for both backends (n/a when no
+          model wrote it, as with a refusal). Total is reasoning plus response plus the network. Total cost is the reasoning calls plus the LLM
+          response calls, each priced from its measured tokens.
+        </p>
       </div>
 
       {pairs.length > 0 && (
@@ -149,45 +158,66 @@ export function PerformancePanel() {
 const ACTOR: Record<ActivityRecord["actor"], { name: string; dot: string }> = {
   typesafe: { name: "TypeSafe", dot: "bg-deep" },
   openai: { name: "OpenAI", dot: "bg-violet-500" },
-  judge: { name: "Judge", dot: "bg-amber-600" },
+  judge: { name: "Judge", dot: "bg-teal-600" },
   writer: { name: "Answer writer", dot: "bg-sky-600" },
 };
-const KIND_LABEL: Record<ActivityRecord["kind"], string> = { chat: "Chat", excerpt: "Excerpt", citation: "Citation", evaluation: "Evaluation", answer: "Answer" };
-const VISIBLE = 8;
+const KIND_LABEL: Record<ActivityRecord["kind"], string> = { chat: "chat", excerpt: "excerpt", citation: "citations", evaluation: "evaluation", answer: "answer" };
+const VISIBLE = 10;
+
+/** A chat turn by a backend: its own reasoning call plus the LLM response that wrote its reply, shown as one row. */
+const isTurn = (r: ActivityRecord) => r.kind === "chat" && (r.actor === "typesafe" || r.actor === "openai");
+
+/** What a row cost: for a chat turn, reasoning plus LLM response. Null when nothing measured a cost. */
+function costOf(r: ActivityRecord): number | null {
+  const reasoning = r.simulated ? null : (r.costUsd ?? null);
+  const writing = r.answerCostUsd ?? null;
+  return reasoning == null && writing == null ? null : (reasoning ?? 0) + (writing ?? 0);
+}
 
 function ActivityRow({ record, now }: { record: ActivityRecord; now: number }) {
   const a = ACTOR[record.actor];
   const pending = record.status === "pending";
-  const facts: string[] = [];
-  if (record.model) facts.push(record.model);
-  if (record.inputTokens != null && record.inputTokens + (record.outputTokens ?? 0) > 0) facts.push(`${count(record.inputTokens)} in / ${count(record.outputTokens ?? 0)} out`);
-  if (record.costUsd != null && !record.simulated) facts.push(fmtUsd(record.costUsd));
-  if (record.score != null) facts.push(`scored ${Math.round(record.score * 100)}%`);
+  const failed = record.status === "error";
+  const cost = pending || failed ? null : costOf(record);
+  const tokens = record.inputTokens != null && record.inputTokens + (record.outputTokens ?? 0) > 0 ? `${count(record.inputTokens)} in / ${count(record.outputTokens ?? 0)} out` : null;
+
+  // One muted line under the headline. A chat turn spells out its parts, so the total reconciles with the metrics table.
+  const parts: string[] = [];
+  if (isTurn(record)) {
+    parts.push(record.simulated ? "reasoning: local demo heuristic, no model call" : `reasoning ${record.modelMs != null ? formatElapsed(record.modelMs) : "n/a"}${record.model ? ` · ${record.model}` : ""}${tokens ? ` · ${tokens}` : ""}`);
+    if (record.answerMs != null) parts.push(`LLM response ${formatElapsed(record.answerMs)}${record.answerModel ? ` · ${record.answerModel}` : ""}`);
+  } else {
+    if (record.model) parts.push(record.model);
+    if (tokens) parts.push(tokens);
+    if (record.score != null) parts.push(`scored ${Math.round(record.score * 100)}%`);
+    if (record.simulated) parts.push("no model call");
+  }
+  const detail = failed ? `Failed${record.note ? `: ${record.note}` : ""}` : pending ? "" : parts.join("  |  ");
+
   return (
-    <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-lg border border-border bg-surface px-3 py-2">
-      <span
-        aria-hidden
-        className={`mt-1.5 h-2 w-2 rounded-full ${pending ? "animate-pulse-dot bg-amber-500" : record.status === "error" ? "bg-rose-600" : a.dot}`}
-      />
-      <div className="min-w-0">
-        <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+    <li className="rounded-md border border-border bg-surface px-2.5 py-1.5" title={`${a.name} · ${KIND_LABEL[record.kind]} · ${record.label}`}>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-baseline gap-x-2 text-xs">
+        <span aria-hidden className={`h-2 w-2 self-center rounded-full ${pending ? "animate-pulse-dot bg-amber-500" : failed ? "bg-rose-600" : a.dot}`} />
+        <p className="truncate">
           <span className="font-bold text-foreground">{a.name}</span>
-          <span className="rounded bg-elevated px-1.5 py-px text-[11px] font-bold uppercase tracking-wide text-muted">{KIND_LABEL[record.kind]}</span>
-          {record.simulated && <span className="text-xs text-muted">no model call</span>}
+          <span className="text-muted"> {KIND_LABEL[record.kind]} · </span>
+          <span className="text-secondary">{record.label}</span>
         </p>
-        <p className="truncate text-xs text-secondary" title={record.label}>
-          {record.label}
-        </p>
-        {record.status === "error" && <p className="mt-0.5 text-xs font-semibold text-rose-800">Failed{record.note ? `: ${record.note}` : ""}</p>}
-        {!pending && facts.length > 0 && <p className="mt-0.5 text-xs text-muted">{facts.join(" · ")}</p>}
+        <span className={`whitespace-nowrap text-sm font-bold tabular-nums ${pending ? "text-amber-800" : failed ? "text-rose-800" : "text-foreground"}`}>
+          <span className="sr-only">{pending ? "running for " : "took "}</span>
+          {formatElapsed(shownElapsed(record, now))}
+          {pending && "…"}
+        </span>
+        <span className="w-[4.75rem] whitespace-nowrap text-right tabular-nums text-secondary">
+          {cost != null && (
+            <>
+              <span className="sr-only">cost </span>
+              {fmtUsd(cost)}
+            </>
+          )}
+        </span>
       </div>
-      <span
-        className={`whitespace-nowrap text-sm font-bold tabular-nums ${pending ? "text-amber-800" : record.status === "error" ? "text-rose-800" : "text-foreground"}`}
-        aria-label={pending ? "running" : "elapsed"}
-      >
-        {formatElapsed(elapsedOf(record, now))}
-        {pending && "…"}
-      </span>
+      {detail && <p className={`mt-0.5 truncate pl-4 text-[11px] leading-snug ${failed ? "font-semibold text-rose-800" : "text-muted"}`}>{detail}</p>}
     </li>
   );
 }
@@ -199,11 +229,13 @@ function ActivityRow({ record, now }: { record: ActivityRecord; now: number }) {
 export function ActivityTrace() {
   const records = useActivities();
   const [showAll, setShowAll] = useState(false);
-  const running = records.filter((r) => r.status === "pending").length;
+  // The answer-writing calls are folded into their backend's chat row (as its LLM response), so they are not listed twice.
+  const rows = records.filter((r) => r.actor !== "writer");
+  const running = rows.filter((r) => r.status === "pending").length;
   const now = useNow(running > 0);
-  if (records.length === 0) return null;
+  if (rows.length === 0) return null;
 
-  const newestFirst = [...records].reverse();
+  const newestFirst = [...rows].reverse();
   const shown = showAll ? newestFirst : newestFirst.slice(0, VISIBLE);
   return (
     <section aria-label="Activity trace" className="space-y-2 rounded-xl border border-border bg-elevated/50 p-3.5">
@@ -213,10 +245,10 @@ export function ActivityTrace() {
           Activity trace
         </h2>
         <span className="text-xs font-semibold text-muted" role="status">
-          {running > 0 ? `${running} running` : `${records.length} call${records.length === 1 ? "" : "s"}`}
+          {running > 0 ? `${running} running` : `${rows.length} call${rows.length === 1 ? "" : "s"}`}
         </span>
       </div>
-      <ul className="space-y-1.5">
+      <ul className="space-y-1">
         {shown.map((r) => (
           <ActivityRow key={r.id} record={r} now={now} />
         ))}

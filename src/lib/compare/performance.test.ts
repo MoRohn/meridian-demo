@@ -8,7 +8,7 @@ beforeEach(() => activityLog.reset());
 
 function call(actor: "typesafe" | "openai", finish: ActivityFinish) {
   const id = activityLog.begin(actor, "chat", "x", 0);
-  activityLog.finish(id, finish, 1);
+  activityLog.finish(id, finish, finish.modelMs || 1); // no answer writing, so the time to answer is the model's own time
 }
 
 const result = (score: number, success = score >= 0.6): EvalResult => ({
@@ -32,6 +32,54 @@ describe("latencyStats", () => {
 });
 
 describe("summarizeBackend", () => {
+  it("keeps a chat turn's model time (the speed comparison) apart from its time to answer (what the chat shows)", () => {
+    const id = activityLog.begin("typesafe", "chat", "x", 0);
+    activityLog.finish(id, { status: "done", modelMs: 766, answerMs: 12_200 }, 13_000);
+    const ts = summarizeBackend("typesafe", activityLog.list(), []);
+    expect(ts.latency?.median).toBe(766);
+    expect(ts.reasoningLatency?.median).toBe(766);
+    expect(ts.writingLatency?.median).toBe(12_200);
+    expect(ts.answerLatency?.median).toBe(13_000);
+  });
+
+  it("compares speed on the time to answer, and shows the models' own call times beside it", () => {
+    const a = activityLog.begin("typesafe", "chat", "x", 0);
+    activityLog.finish(a, { status: "done", modelMs: 766 }, 8_500); // Jev 766ms, then an answer written for 7.7s
+    const b = activityLog.begin("openai", "chat", "x", 0);
+    activityLog.finish(b, { status: "done", modelMs: 4_200 }, 4_200);
+    const speed = compareBackends(summarizeBackend("typesafe", activityLog.list(), []), summarizeBackend("openai", activityLog.list(), [])).find((d) => d.id === "speed")!;
+    expect(speed.edge).toBe("openai");
+    expect(speed.detail).toContain("Model total time, median 8.5s vs 4.2s");
+    expect(speed.detail).toContain("Model reasoning alone: 766ms vs 4.2s");
+  });
+
+  it("totals a backend's cost as its reasoning calls plus the LLM response that wrote its replies", () => {
+    const id = activityLog.begin("typesafe", "chat", "x", 0);
+    activityLog.finish(id, { status: "done", modelMs: 500, costUsd: 0.000175, answerMs: 7000, answerCostUsd: 0.004 }, 8_000);
+    const cite = activityLog.begin("typesafe", "citation", "y", 0);
+    activityLog.finish(cite, { status: "done", modelMs: 300, costUsd: 0.00005 }, 300);
+    const ts = summarizeBackend("typesafe", activityLog.list(), []);
+    expect(ts.reasoningCostUsd).toBeCloseTo(0.000225, 9);
+    expect(ts.writingCostUsd).toBeCloseTo(0.004, 9);
+    expect(ts.costUsd).toBeCloseTo(0.004225, 9);
+    expect(ts.costUsd).toBeCloseTo(ts.reasoningCostUsd + (ts.writingCostUsd ?? 0), 12);
+  });
+
+  it("has no LLM response cost when no model wrote a reply, and the total is then just the reasoning", () => {
+    call("openai", { status: "done", modelMs: 900, costUsd: 0.01 });
+    const oa = summarizeBackend("openai", activityLog.list(), []);
+    expect(oa.writingCostUsd).toBeNull();
+    expect(oa.costUsd).toBe(oa.reasoningCostUsd);
+  });
+
+  it("has no time to answer without a chat turn", () => {
+    const id = activityLog.begin("openai", "citation", "x", 0);
+    activityLog.finish(id, { status: "done", modelMs: 640 }, 900);
+    const oa = summarizeBackend("openai", activityLog.list(), []);
+    expect(oa.answerLatency).toBeNull();
+    expect(oa.writingLatency).toBeNull();
+  });
+
   it("counts calls, failures, tokens and cost, and only from that backend", () => {
     call("typesafe", { status: "done", modelMs: 500, inputTokens: 100, outputTokens: 10, costUsd: 0.001 });
     call("typesafe", { status: "error" });

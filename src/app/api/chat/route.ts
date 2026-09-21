@@ -48,6 +48,8 @@ export async function POST(req: NextRequest) {
           session: publicSession(session),
           live: isLive(body.typesafeOverride),
           openaiConfigured: isOpenAIConfigured(body.openaiOverride),
+          // Only whether the server has its own keys (from .env.local), never the keys: the Settings dialog shows "from .env.local".
+          envKeys: { typesafe: isLive(), openai: isOpenAIConfigured() },
         });
       }
 

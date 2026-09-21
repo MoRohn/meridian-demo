@@ -33,6 +33,13 @@ describe("POST /api/chat: who may hold a session", () => {
     expect((await res.json()).session.id).toBe(SESSION);
   });
 
+  it("says whether the server has its own keys, and never sends them", async () => {
+    const res = await post({ action: "reset", sessionId: SESSION });
+    const data = await res.json();
+    expect(data.envKeys).toEqual({ typesafe: false, openai: false });
+    expect(JSON.stringify(data)).not.toMatch(/sk-|apiKey/i);
+  });
+
   it("refuses a page on another site, and a caller past the rate limit", async () => {
     expect((await post({ action: "reset", sessionId: SESSION }, { origin: "https://evil.example", host: "localhost:3000" })).status).toBe(403);
     let last = 200;

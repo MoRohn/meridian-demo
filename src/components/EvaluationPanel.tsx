@@ -166,8 +166,8 @@ function CompactSides({ sides, stored, sigOf, serviceDown }: { sides: Side[]; st
               <th scope="col" className="px-2.5 py-1.5">Model</th>
               <th scope="col" className="px-2 py-1.5">Score</th>
               <th scope="col" className="px-2 py-1.5">Result</th>
-              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Resp. time</th>
-              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Resp. cost</th>
+              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Total time</th>
+              <th scope="col" className="px-2 py-1.5 max-[479px]:hidden">Total cost</th>
             </tr>
           </thead>
           {views.map(({ side, view }) => (
@@ -248,8 +248,12 @@ function CompactResultRows({ name, result, response }: { name: string; result: E
           </span>
           <span className="mt-0.5 block text-[11px] text-muted">at {Math.round(result.threshold * 100)}%</span>
         </td>
-        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{response?.ms != null ? formatElapsed(response.ms) : "n/a"}</td>
-        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden">{response?.costUsd != null ? fmtUsd(response.costUsd) : "n/a"}</td>
+        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden" title={response?.ms != null ? `Model total time. Reasoning ${response.reasoningMs != null ? formatElapsed(response.reasoningMs) : "n/a"}${response.writingMs != null ? `, LLM response ${formatElapsed(response.writingMs)}` : ""}` : undefined}>
+          {response?.ms != null ? formatElapsed(response.ms) : "n/a"}
+        </td>
+        <td className="px-2 pt-2 tabular-nums text-secondary max-[479px]:hidden" title={response?.costUsd != null ? `Total cost. Reasoning ${response.reasoningCostUsd != null ? fmtUsd(response.reasoningCostUsd) : "n/a"}${response.writingCostUsd != null ? `, LLM response ${fmtUsd(response.writingCostUsd)}` : ""}` : undefined}>
+          {response?.costUsd != null ? fmtUsd(response.costUsd) : "n/a"}
+        </td>
       </tr>
       <tr>
         <td colSpan={5} className="px-2.5 pb-2 pt-1 leading-relaxed text-secondary">
@@ -371,7 +375,7 @@ export function EvaluationPanel({
       const response = before && before.sig === sig && before.response !== undefined ? before.response : responseFor(activityLog.list(), scope, kind, side.backend);
       evalStore.set(scope, side.backend, { sig, outcome: null, pending: true, auto, kind, packet: snapshot, response });
       // Each judge call is its own activity with its own timer, so it starts from zero whatever else is running.
-      const activityId = activityLog.begin("judge", "evaluation", `${copy.title}: ${side.name}`);
+      const activityId = activityLog.begin("judge", "evaluation", `${copy.title}: ${side.name}${scope.endsWith(":excerpt") ? " (highlighted excerpt)" : ""}`);
       runEvaluation({ kind, backend: side.backend, input: packet.input, actualOutput: packet.actualOutput, context: packet.context }).then((outcome) => {
         evalStore.set(scope, side.backend, { sig, outcome, pending: false, auto, kind, packet: snapshot, response });
         activityLog.finish(

@@ -1,5 +1,5 @@
 import type { ActivityRecord } from "../activity/log";
-import { elapsedOf, formatElapsed } from "../activity/log";
+import { elapsedOf, formatElapsed, wallOf } from "../activity/log";
 import type { StoredEvaluationRow } from "../eval/store";
 import type { EvalKind, EvalResult } from "../eval/types";
 import { fmtUsd } from "./pricing";
@@ -36,10 +36,22 @@ export interface BackendPerformance {
   backend: Backend;
   calls: number;
   failures: number;
+  /** The backend's own model call (the like-for-like speed figure). */
   latency: LatencyStats | null;
+  /** Chat turns only: "model total time", the whole time to answer as the chat card shows it (reasoning + LLM response + network). */
+  answerLatency: LatencyStats | null;
+  /** Chat turns only: "model reasoning", the backend's own judgment call. */
+  reasoningLatency: LatencyStats | null;
+  /** Chat turns only: "LLM response", the answer-writing model. Null when no model wrote any reply. */
+  writingLatency: LatencyStats | null;
   inputTokens: number;
   outputTokens: number;
+  /** Everything spent on this backend's answers: reasoning plus LLM response (the answer-writing model). */
   costUsd: number;
+  /** The backend's own model calls (judgments, excerpt scans, citation checks). */
+  reasoningCostUsd: number;
+  /** The answer-writing model's calls on this backend's chat turns. Null when no model wrote a reply. */
+  writingCostUsd: number | null;
   quality: QualityStats;
   /** Spend per judged-and-passed answer: what a trustworthy answer cost. Null until one has passed. */
   costPerPass: number | null;
@@ -74,6 +86,14 @@ export function summarizeBackend(backend: Backend, records: readonly ActivityRec
   const timed = ok.filter((r) => (r.modelMs ?? 1) > 0);
   const latency = latencyStats(timed.map((r) => elapsedOf(r, 0)), timed.length ? elapsedOf(timed[timed.length - 1], 0) : 0);
 
+  const turns = timed.filter((r) => r.kind === "chat");
+  const answerLatency = latencyStats(turns.map((r) => wallOf(r, 0)), turns.length ? wallOf(turns[turns.length - 1], 0) : 0);
+
+  const reasoning = turns.map((r) => r.modelMs ?? 0);
+  const reasoningLatency = latencyStats(reasoning, reasoning.length ? reasoning[reasoning.length - 1] : 0);
+  const written = turns.filter((r) => r.answerMs != null).map((r) => r.answerMs as number);
+  const writingLatency = latencyStats(written, written.length ? written[written.length - 1] : 0);
+
   const scored = evals.filter((e) => e.backend === backend && e.outcome?.ok);
   const results = scored.map((e) => ({ kind: e.kind, result: (e.outcome as { ok: true; result: EvalResult }).result }));
   const passed = results.filter((r) => r.result.success).length;
@@ -85,15 +105,23 @@ export function summarizeBackend(backend: Backend, records: readonly ActivityRec
     slot.n += 1;
     byKind[kind] = slot;
   }
-  const costUsd = sum(ok.map((r) => r.costUsd ?? 0));
+  const reasoningCostUsd = sum(ok.map((r) => r.costUsd ?? 0));
+  const writtenTurns = ok.filter((r) => r.answerCostUsd != null);
+  const writingCostUsd = writtenTurns.length ? sum(writtenTurns.map((r) => r.answerCostUsd as number)) : null;
+  const costUsd = reasoningCostUsd + (writingCostUsd ?? 0);
   return {
     backend,
     calls: mine.length,
     failures: mine.length - ok.length,
     latency,
+    answerLatency,
+    reasoningLatency,
+    writingLatency,
     inputTokens: sum(ok.map((r) => r.inputTokens ?? 0)),
     outputTokens: sum(ok.map((r) => r.outputTokens ?? 0)),
     costUsd,
+    reasoningCostUsd,
+    writingCostUsd,
     quality: {
       evaluated: results.length,
       passed,
@@ -164,18 +192,23 @@ export function compareBackends(ts: BackendPerformance, oa: BackendPerformance):
     });
   }
 
-  const [tl, ol] = [ts.latency?.median ?? null, oa.latency?.median ?? null];
+  // Speed is what the reader waited for: the model total time of a chat turn, the same figure the chat card, the header timer and the
+  // activity trace show. With no chat turn on one side, it falls back to the models' own call times.
+  const byAnswer = ts.answerLatency != null && oa.answerLatency != null;
+  const [tStats, oStats] = byAnswer ? [ts.answerLatency, oa.answerLatency] : [ts.latency, oa.latency];
+  const [tl, ol] = [tStats?.median ?? null, oStats?.median ?? null];
   const speedEdge = edgeLowerIsBetter(tl, ol, TIE.speed);
+  const reasoningAlone = byAnswer && ts.reasoningLatency && oa.reasoningLatency ? ` Model reasoning alone: ${formatElapsed(ts.reasoningLatency.median)} vs ${formatElapsed(oa.reasoningLatency.median)}.` : "";
   dims.push({
     id: "speed",
     label: "Speed",
     edge: speedEdge,
     detail:
-      tl == null || ol == null
+      tl == null || ol == null || !tStats || !oStats
         ? "Needs a completed call from both models."
-        : `Median ${formatElapsed(tl)} vs ${formatElapsed(ol)}` +
+        : `${byAnswer ? "Model total time" : "Model reasoning"}, median ${formatElapsed(tl)} vs ${formatElapsed(ol)}` +
           (speedEdge === "tie" ? ", within noise." : `, ${speedEdge === "typesafe" ? ratio(ol, tl) : ratio(tl, ol)} faster.`) +
-          ` Slowest call ${formatElapsed(ts.latency!.max)} vs ${formatElapsed(oa.latency!.max)}.`,
+          reasoningAlone,
   });
 
   const [tOk, oOk] = [ts.calls - ts.failures, oa.calls - oa.failures]; // a failed call is not billed, so it is not in the average
@@ -188,7 +221,7 @@ export function compareBackends(ts: BackendPerformance, oa: BackendPerformance):
     detail:
       tc == null || oc == null
         ? "Needs a completed call from both models."
-        : `${fmtUsd(tc)} vs ${fmtUsd(oc)} per call` +
+        : `${fmtUsd(tc)} vs ${fmtUsd(oc)} per call (reasoning + LLM response)` +
           (costEdge === "tie" || tc === 0 || oc === 0 ? "" : `, ${costEdge === "typesafe" ? ratio(oc, tc) : ratio(tc, oc)} cheaper`) +
           (ts.costPerPass != null && oa.costPerPass != null ? `; per passing answer ${fmtUsd(ts.costPerPass)} vs ${fmtUsd(oa.costPerPass)}.` : "."),
   });

@@ -27,6 +27,12 @@ export interface ActivityRecord {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** A chat turn only: how long the answer-writing model took (the "LLM response"), inside the turn's total time. Absent when no model wrote the reply. */
+  answerMs?: number;
+  /** A chat turn only: what that answer-writing model call cost. `costUsd` stays the backend's own reasoning call. */
+  answerCostUsd?: number;
+  /** A chat turn only: which model wrote the reply. */
+  answerModel?: string;
   costUsd?: number;
   /** A judge call's 0..1 score. */
   score?: number;
@@ -36,7 +42,7 @@ export interface ActivityRecord {
   note?: string;
 }
 
-export type ActivityFinish = Partial<Pick<ActivityRecord, "modelMs" | "model" | "inputTokens" | "outputTokens" | "costUsd" | "score" | "note" | "simulated">> & {
+export type ActivityFinish = Partial<Pick<ActivityRecord, "modelMs" | "model" | "inputTokens" | "outputTokens" | "answerMs" | "answerCostUsd" | "answerModel" | "costUsd" | "score" | "note" | "simulated">> & {
   status: "done" | "error";
 };
 
@@ -99,6 +105,22 @@ export function currentActivity(all: readonly ActivityRecord[], actor: ActivityA
 export function elapsedOf(record: ActivityRecord, now: number): number {
   if (record.status === "pending") return Math.max(0, now - record.startedAt);
   return record.modelMs ?? Math.max(0, (record.endedAt ?? record.startedAt) - record.startedAt);
+}
+
+/** Wall-clock time from a call starting to it finishing (to `now` while it runs): everything the reader waited for. */
+export function wallOf(record: ActivityRecord, now: number): number {
+  return Math.max(0, (record.status === "pending" ? now : (record.endedAt ?? record.startedAt)) - record.startedAt);
+}
+
+/**
+ * The time a timer or a log row shows. For a backend's chat turn that is the whole time to answer, the same figure the
+ * chat card shows: the backend's own model call, then the answer-writing model, then the network. It counts up while the
+ * turn runs and stops on that same number, so it never jumps down to the model-only time when the turn ends. Every other
+ * call shows the model's own measured time.
+ */
+export function shownElapsed(record: ActivityRecord, now: number): number {
+  const turn = record.kind === "chat" && (record.actor === "typesafe" || record.actor === "openai");
+  return turn ? wallOf(record, now) : elapsedOf(record, now);
 }
 
 export function formatElapsed(ms: number): string {

@@ -106,11 +106,79 @@ async function ask(page, text) {
   await page.getByRole("tab", { name: /^Trace/ }).click();
   await page.waitForTimeout(500);
   const trace = await page.getByRole("tabpanel").innerText();
-  check(/Answer writer/.test(trace) && /Answer from TypeSafe's findings/.test(trace), "model: the writing is logged as its own activity");
-  check(/gpt-4o/.test(trace) && /1,800 in \/ 140 out/.test(trace), "model: the log shows its model and tokens");
+  check(/LLM response/.test(trace) && /gpt-4o/.test(trace), "model: the writing is shown as the LLM response on the backend's own row, with its model");
+  check(!/Answer writer/.test(trace), "model: the writing is not listed a second time as a row of its own");
   // TypeSafe made two calls (the analysis and the question); the writer's call must not be counted as a third.
   const perf = await page.locator('section[aria-label="Model performance"]').innerText().catch(() => "");
   check(perf === "" || /Calls \(failed\)\s*\n?\s*2 \(0\)/.test(perf) || !/Calls \(failed\)\s*\n?\s*3/.test(perf), "model: the writer's call is not counted in TypeSafe's call count", perf.slice(0, 120));
+  check(errors.length === 0, "no page errors", errors.join(" | "));
+  await page.context().close();
+}
+
+// ---- both models answer every question, in the order they finish ----------
+{
+  const openaiTurn = {
+    reply: "OpenAI's answer: either party may terminate on **30 days** notice.",
+    intent: { choice: "ask_legal_question", confidence: 0.9 },
+    risk: null,
+    complianceFlags: [],
+    blocked: null,
+    answer: { source: "model", model: "gpt-4o", usage: { input_tokens: 900, output_tokens: 80 }, elapsedMs: 300, costUsd: 0.002 },
+  };
+  const openaiOutcome = { ok: true, result: { model: "gpt-4o", answers: {}, usage: { input_tokens: 900, output_tokens: 80 }, elapsedMs: 300, source: "live", requestBytes: 5000 } };
+  const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  let slowOpenAI = 0; // ms OpenAI takes to answer, so each half of the test can make either model finish first
+  let failOpenAI = false;
+  await page.route("**/api/chat", async (route) => {
+    const res = await route.fetch();
+    const data = await res.json();
+    data.openaiConfigured = true;
+    // TypeSafe takes ~1.5s on the free-typed question; the document load and first analysis stay quick.
+    if (route.request().postDataJSON().action === "message" && /terminate/i.test(route.request().postDataJSON().message)) await new Promise((r) => setTimeout(r, 1500));
+    return route.fulfill({ response: res, json: data });
+  });
+  await page.route("**/api/compare-openai", async (route) => {
+    await new Promise((r) => setTimeout(r, slowOpenAI));
+    if (failOpenAI) return route.fulfill({ status: 500, json: { error: "Internal error" } });
+    return route.fulfill({ json: { outcome: openaiOutcome, turn: openaiTurn, questionCount: 3, configured: true } });
+  });
+  await page.goto(URL_, { waitUntil: "networkidle" });
+  await page.getByText("SaaS Master Services Agreement", { exact: false }).first().click();
+  await page.waitForTimeout(3000);
+  await page.getByRole("button", { name: "Collapse" }).click(); // the full conversation, not the compact line
+  const log = page.locator('[role="log"]');
+  const ask2 = async (text, waitMs) => {
+    await page.getByPlaceholder("Ask about the context…").fill(text);
+    await page.getByRole("button", { name: "Send" }).click();
+    await page.waitForTimeout(waitMs);
+  };
+
+  // OpenAI answers fast, TypeSafe slowly: OpenAI's card comes first and is ranked 1st.
+  await ask2("Can I terminate early?", 400);
+  const waiting = await log.innerText();
+  check(/OpenAI[\s\S]*1st/.test(waiting) && /TypeSafe[\s\S]*answering/.test(waiting), "both: the fast model's answer is shown while the slow one is still marked as answering", waiting.slice(-300));
+  await page.waitForTimeout(2500);
+  const first = await log.innerText();
+  check(first.indexOf("OpenAI's answer") !== -1 && first.indexOf("OpenAI's answer") < first.indexOf("TypeSafe", first.indexOf("OpenAI's answer")), "both: the answers are listed in the order they finished (OpenAI first)");
+  check(/1st/.test(first) && /2nd/.test(first), "both: each answer shows where it finished");
+  check(/Written by gpt-4o from the document and OpenAI's findings/.test(first), "both: OpenAI's answer says whose findings it was written from");
+
+  // TypeSafe answers fast, OpenAI slowly: the order flips with them.
+  slowOpenAI = 1800;
+  await ask2("What are the payment terms?", 3500);
+  const second = (await log.innerText()).split("What are the payment terms?")[1] ?? "";
+  check(second.indexOf("TypeSafe") !== -1 && second.indexOf("TypeSafe") < second.indexOf("OpenAI"), "both: when TypeSafe finishes first it is listed first", second.slice(0, 200));
+
+  // OpenAI failing is shown as its own card, without losing TypeSafe's answer.
+  slowOpenAI = 0;
+  failOpenAI = true;
+  await ask2("Who is the governing law?", 3500);
+  const third = (await log.innerText()).split("Who is the governing law?")[1] ?? "";
+  check(/OpenAI could not answer/.test(third) && /TypeSafe/.test(third), "both: an OpenAI failure is shown in the chat next to TypeSafe's answer", third.slice(0, 200));
+
+  await page.getByRole("tab", { name: /^Trace/ }).click();
   check(errors.length === 0, "no page errors", errors.join(" | "));
   await page.context().close();
 }

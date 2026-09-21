@@ -63,8 +63,8 @@ pre { margin: 6px 0; padding: 10px 12px; overflow-x: auto; white-space: pre-wrap
 .scroll { margin: 10px 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.4; }
 th, td { padding: 6px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-td:last-child { min-width: 16rem; }
-th { background: var(--deep); color: #fff; font-weight: 600; white-space: nowrap; }
+td:last-child { min-width: 13rem; }
+th { background: var(--deep); color: #fff; font-weight: 600; }
 tbody tr:nth-child(even) { background: var(--wash); }
 tbody tr:last-child td { border-bottom: 0; }
 .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-weight: 600; white-space: nowrap; }

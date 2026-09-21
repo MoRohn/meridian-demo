@@ -35,11 +35,14 @@ const CUSTOM = "__custom__";
 export function SettingsModal({
   open,
   settings,
+  envKeys,
   onClose,
   onSave,
 }: {
   open: boolean;
   settings: ApiKeySettings;
+  /** Which backends the server already has a key for (from .env.local). Shown as filled in; a key typed here still wins. */
+  envKeys?: { typesafe: boolean; openai: boolean };
   onClose: () => void;
   onSave: (next: ApiKeySettings) => void;
 }) {
@@ -125,6 +128,7 @@ export function SettingsModal({
         <ProviderSection
           title="TypeSafe"
           keyValue={draft.typesafeApiKey}
+          fromEnv={Boolean(envKeys?.typesafe)}
           modelValue={draft.typesafeModel}
           models={TYPESAFE_MODELS}
           onKeyChange={(v) => update("typesafeApiKey", v)}
@@ -137,6 +141,7 @@ export function SettingsModal({
         <ProviderSection
           title="OpenAI"
           keyValue={draft.openaiApiKey}
+          fromEnv={Boolean(envKeys?.openai)}
           modelValue={draft.openaiModel}
           models={OPENAI_MODELS}
           onKeyChange={(v) => update("openaiApiKey", v)}
@@ -152,7 +157,7 @@ export function SettingsModal({
           <div role="radiogroup" aria-label="Judge model" className="space-y-1.5">
             {JUDGE_OPTIONS.map((o) => {
               const selected = draft.judgeProvider === o.id;
-              const missingOpenAIKey = o.id === "saved" && !draft.openaiApiKey.trim();
+              const missingOpenAIKey = o.id === "saved" && !draft.openaiApiKey.trim() && !envKeys?.openai;
               return (
                 <label
                   key={o.id}
@@ -289,6 +294,7 @@ export function SettingsModal({
 function ProviderSection({
   title,
   keyValue,
+  fromEnv,
   modelValue,
   models,
   onKeyChange,
@@ -297,16 +303,24 @@ function ProviderSection({
 }: {
   title: string;
   keyValue: string;
+  /** The server has its own key for this backend. It is used whenever no key is saved here. */
+  fromEnv: boolean;
   modelValue: string;
   models: ModelOption[];
   onKeyChange: (v: string) => void;
   onModelChange: (v: string) => void;
   onClear: () => void;
 }) {
+  const usingEnv = fromEnv && !keyValue;
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-wide text-muted">{title}</p>
+        <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-muted">
+          {title}
+          {usingEnv && (
+            <span className="rounded-full border border-emerald-600/30 bg-emerald-600/10 px-1.5 py-px text-[10px] font-bold tracking-wide text-emerald-800">Set in .env.local</span>
+          )}
+        </p>
         {keyValue && (
           <button onClick={onClear} className="-my-2 -mr-2 flex min-h-9 min-w-9 items-center justify-center px-2 text-xs font-bold text-secondary hover:text-rose-800">
             Clear
@@ -317,12 +331,19 @@ function ProviderSection({
         type="password"
         value={keyValue}
         onChange={(e) => onKeyChange(e.target.value)}
-        placeholder={`${title} API key`}
+        // The server's key is never sent to the browser, so it is shown as dots: filled in, and in use, until a key typed here replaces it.
+        placeholder={usingEnv ? "••••••••••••••••••••••••" : `${title} API key`}
         aria-label={`${title} API key`}
+        aria-describedby={usingEnv ? `${title}-env-note` : undefined}
         autoComplete="off"
         spellCheck={false}
         className="w-full rounded-lg border border-border-strong bg-elevated px-3 py-2.5 text-sm text-foreground outline-none focus:border-deep focus-visible:ring-2 focus-visible:ring-deep/50"
       />
+      {usingEnv && (
+        <p id={`${title}-env-note`} className="text-xs leading-relaxed text-muted">
+          Using the key from the server&rsquo;s <code className="text-accent-soft-ink">.env.local</code>. Type a key here to override it for this browser.
+        </p>
+      )}
       <select
         value={modelValue}
         onChange={(e) => onModelChange(e.target.value)}

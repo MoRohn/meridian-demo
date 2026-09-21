@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DocumentPanel } from "@/components/DocumentPanel";
 import { ChatConversation, type ChatMessage } from "@/components/ChatConversation";
 import { MobileNav, type MobileView } from "@/components/MobileNav";
@@ -15,6 +15,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { activityLog, type ActivityFinish, type ActivityKind } from "@/lib/activity/log";
 import { describeAnswer, openaiActivityResult, typesafeActivityResult, writerActivityResult } from "@/lib/activity/outcomes";
 import type { TurnAnswer } from "@/lib/chat/answer";
+import type { ChatBackend } from "@/lib/chat/order";
 import { Workspace, type WorkspaceTab } from "@/components/Workspace";
 import { ReasoningTrace } from "@/components/ReasoningTrace";
 import { RiskDashboard } from "@/components/RiskDashboard";
@@ -67,6 +68,11 @@ export default function Home() {
   const [sessionId] = useState(newSessionId);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
+  /** Backends still working on the latest question: each shows a waiting card in the chat until its own answer lands. */
+  const [pendingBackends, setPendingBackends] = useState<ChatBackend[]>([]);
+  /** Numbers each question so its two replies can be grouped and ranked; bumped on a reset so a late reply from before it is dropped. */
+  const turnCounter = useRef(0);
+  const sessionEpoch = useRef(0);
   const [live, setLive] = useState(false);
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null);
   const [contextFacts, setContextFacts] = useState<ContextFacts>({});
@@ -97,6 +103,8 @@ export default function Home() {
   /** The reply Meridian composed from OpenAI's answers to the latest chat turn, so OpenAI's reply can be evaluated like TypeSafe's. */
   const [openaiTurn, setOpenaiTurn] = useState<OpenAITurn | null>(null);
   const [openaiConfigured, setOpenaiConfigured] = useState(false);
+  /** Whether the server holds its own key for each backend (.env.local), so Settings can show it as filled in. The keys themselves never leave the server. */
+  const [envKeys, setEnvKeys] = useState({ typesafe: false, openai: false });
 
   // Highlighted-excerpt analysis — scoped separately from the whole-document
   // risk/compliance state above so highlighting a passage never clobbers the
@@ -115,17 +123,17 @@ export default function Home() {
   // Every model call is its own record in the activity log (src/lib/activity/log.ts), with its own start time. The header
   // timers, the activity windows and the activity trace all read from it, so each action starts a fresh timer from zero
   // and a slow older call finishing late can only ever update its own record, never a newer action's timer.
-  function beginTypesafeActivity(kind: ActivityKind, label: string): number {
-    return activityLog.begin("typesafe", kind, label);
+  function beginTypesafeActivity(kind: ActivityKind, label: string, now?: number): number {
+    return activityLog.begin("typesafe", kind, label, now);
   }
-  function finishTypesafeActivity(id: number, result: ActivityFinish) {
-    activityLog.finish(id, result);
+  function finishTypesafeActivity(id: number, result: ActivityFinish, now?: number) {
+    activityLog.finish(id, result, now);
   }
-  function beginOpenaiActivity(kind: ActivityKind, label: string): number {
-    return activityLog.begin("openai", kind, label);
+  function beginOpenaiActivity(kind: ActivityKind, label: string, now?: number): number {
+    return activityLog.begin("openai", kind, label, now);
   }
-  function finishOpenaiActivity(id: number, result: ActivityFinish) {
-    activityLog.finish(id, result);
+  function finishOpenaiActivity(id: number, result: ActivityFinish, now?: number) {
+    activityLog.finish(id, result, now);
   }
 
   /**
@@ -194,6 +202,7 @@ export default function Home() {
       .then((data) => {
         setLive(Boolean(data.live));
         setOpenaiConfigured(Boolean(data.openaiConfigured));
+        if (data.envKeys) setEnvKeys({ typesafe: Boolean(data.envKeys.typesafe), openai: Boolean(data.envKeys.openai) });
       })
       .catch(() => {});
     // Deferred a tick so the synchronous setState(null) branches inside
@@ -207,16 +216,40 @@ export default function Home() {
    * Fires the two backends as genuinely independent requests, at the same
    * moment, rather than bundling the OpenAI comparison into the chat
    * response. Each promise updates its own status/state the instant IT
-   * resolves — the TypeSafe and OpenAI columns on every analysis tab are
-   * driven by two separate fetches racing each other in real time.
+   * resolves — the TypeSafe and OpenAI columns on every analysis tab, and
+   * each model's reply in the chat, are driven by two separate fetches
+   * racing each other in real time, so replies appear in finish order.
    */
   async function handleSend(text: string, scope: "all" | "risk" | "compliance" = "all") {
+    const turn = ++turnCounter.current;
+    const epoch = sessionEpoch.current;
+    // One clock for the whole turn: the chat card, the header timer and the activity log all measure from this start to
+    // the moment that backend's reply lands, so the three always show the same time to answer.
+    const startedAt = Date.now();
+    // A key saved in Settings counts straight away; the server's own flag only reflects the key it last saw.
+    const openaiWillRun = Boolean(oaOverride?.apiKey) || openaiConfigured;
+    const backends: ChatBackend[] = openaiWillRun ? ["typesafe", "openai"] : ["typesafe"];
+
     setMessages((m) => [...m, { role: "user", text }]);
     setLastMessage(text);
     setOpenaiTurn(null); // never pair a new TypeSafe reply with OpenAI's reply to the previous message
     setSending(true);
-    const tsEpoch = beginTypesafeActivity("chat", text);
-    const oaEpoch = openaiConfigured ? beginOpenaiActivity("chat", text) : null;
+    setPendingBackends(backends);
+    const tsEpoch = beginTypesafeActivity("chat", text, startedAt);
+    const oaEpoch = openaiWillRun ? beginOpenaiActivity("chat", text, startedAt) : null;
+
+    /** Puts one backend's reply in the chat the moment it is ready, so replies appear in the order they finish. A reply from before a reset is dropped. */
+    function deliver(backend: ChatBackend, doneAt: number, reply: Pick<ChatMessage, "text" | "via" | "note" | "failed" | "modelMs" | "answerMs">) {
+      if (epoch !== sessionEpoch.current) return;
+      setMessages((m) => [...m, { role: "assistant", backend, turn, elapsedMs: doneAt - startedAt, ...reply }]);
+    }
+    /** The answer-writing model's time, when one wrote the reply: part of the turn's time, and separate from the backend's own model time. */
+    const writingMs = (answer: TurnAnswer | null | undefined) => (answer?.source === "model" ? answer.elapsedMs : undefined);
+    const writingCost = (answer: TurnAnswer | null | undefined) => (answer?.source === "model" ? answer.costUsd : undefined);
+    const writingModel = (answer: TurnAnswer | null | undefined) => (answer?.source === "model" ? answer.model : undefined);
+    function settle(backend: ChatBackend) {
+      if (epoch === sessionEpoch.current) setPendingBackends((p) => p.filter((b) => b !== backend));
+    }
 
     const chatPromise = callApi({
       action: "message",
@@ -237,8 +270,9 @@ export default function Home() {
           context: ContextStats;
           answer: TurnAnswer;
         };
+        const doneAt = Date.now();
         const { via, note } = describeAnswer(result.answer, "TypeSafe");
-        setMessages((m) => [...m, { role: "assistant", text: result.reply, via, note }]);
+        deliver("typesafe", doneAt, { text: result.reply, via, note, modelMs: result.elapsedMs, answerMs: writingMs(result.answer) });
         logWrittenAnswer(result.answer, "TypeSafe");
         setLastReply(result.reply);
         setTrace(result.trace);
@@ -257,7 +291,7 @@ export default function Home() {
           outputTokens: result.usage.output_tokens,
           answer: answerCallMetrics(result.answer),
         });
-        finishTypesafeActivity(tsEpoch, typesafeActivityResult(result.source, result.elapsedMs, result.usage));
+        finishTypesafeActivity(tsEpoch, { ...typesafeActivityResult(result.source, result.elapsedMs, result.usage), answerMs: writingMs(result.answer), answerCostUsd: writingCost(result.answer), answerModel: writingModel(result.answer) }, doneAt);
         setLive(Boolean(data.live));
         setOpenaiConfigured(Boolean(data.openaiConfigured));
         setContextFacts(data.session?.contextFacts ?? {});
@@ -279,25 +313,39 @@ export default function Home() {
         }));
       })
       .catch((err) => {
-        finishTypesafeActivity(tsEpoch, { status: "error", note: (err as Error).message });
-        setMessages((m) => [...m, { role: "assistant", text: `Error: ${(err as Error).message}` }]);
+        const doneAt = Date.now();
+        finishTypesafeActivity(tsEpoch, { status: "error", note: (err as Error).message }, doneAt);
+        deliver("typesafe", doneAt, { text: `TypeSafe could not answer: ${(err as Error).message}`, failed: true });
       })
-      .finally(() => setSending(false));
+      .finally(() => settle("typesafe"));
 
+    // A second, independent request: OpenAI's own findings for the same question, and the reply composed from them.
     const openaiPromise =
-      openaiConfigured && oaEpoch != null
+      openaiWillRun && oaEpoch != null
         ? fetch("/api/compare-openai", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ sessionId, message: text, override: oaOverride }),
           })
-            .then((r) => r.json())
-            .then((data: { outcome: OpenAIRunOutcome; turn?: OpenAITurn | null }) => {
+            .then(async (r) => {
+              const data = await r.json().catch(() => ({}));
+              if (!r.ok) throw new Error(data?.error ?? `Request failed (${r.status})`);
+              return data as { outcome: OpenAIRunOutcome; turn?: OpenAITurn | null };
+            })
+            .then((data) => {
+              const doneAt = Date.now();
               const outcome = data.outcome;
               setOpenaiOutcome(outcome);
               setOpenaiTurn(data.turn ?? null);
-              finishOpenaiActivity(oaEpoch, openaiActivityResult(outcome));
+              finishOpenaiActivity(oaEpoch, { ...openaiActivityResult(outcome), answerMs: writingMs(data.turn?.answer), answerCostUsd: writingCost(data.turn?.answer), answerModel: writingModel(data.turn?.answer) }, doneAt);
               logWrittenAnswer(data.turn?.answer, "OpenAI");
+              if (data.turn) {
+                const { via, note } = describeAnswer(data.turn.answer, "OpenAI");
+                deliver("openai", doneAt, { text: data.turn.reply, via, note, modelMs: outcome?.ok ? outcome.result.elapsedMs : undefined, answerMs: writingMs(data.turn.answer) });
+              } else {
+                const why = outcome && !outcome.ok ? (outcome.reason === "not_configured" ? "no OpenAI API key is set" : outcome.message) : undefined;
+                deliver("openai", doneAt, { text: `OpenAI could not answer${why ? `: ${why}` : "."}`, failed: true });
+              }
               if (outcome?.ok) {
                 const result = outcome.result;
                 setOpenaiMetrics({
@@ -323,15 +371,20 @@ export default function Home() {
               }
             })
             .catch((err) => {
-              finishOpenaiActivity(oaEpoch, { status: "error", note: (err as Error).message });
+              const doneAt = Date.now();
+              finishOpenaiActivity(oaEpoch, { status: "error", note: (err as Error).message }, doneAt);
+              deliver("openai", doneAt, { text: `OpenAI could not answer: ${(err as Error).message}`, failed: true });
             })
+            .finally(() => settle("openai"))
         : Promise.resolve();
 
-    // Both fire immediately above; we only await the chat call for the
-    // "sending" spinner — the OpenAI window keeps updating in the
-    // background even after the user is free to send the next message.
-    void openaiPromise;
-    await chatPromise;
+    // Both are already in flight. The input stays busy until both have answered (or failed), so the next question never
+    // starts while this one's replies are still arriving, and the two replies always belong to the same question.
+    try {
+      await Promise.all([chatPromise, openaiPromise]);
+    } finally {
+      if (epoch === sessionEpoch.current) setSending(false);
+    }
   }
 
   /**
@@ -527,6 +580,8 @@ export default function Home() {
     setSending(true);
     try {
       const data = await callApi({ action: "reset", sessionId, typesafeOverride: tsOverride, openaiOverride: oaOverride });
+      sessionEpoch.current++; // replies still on their way from before the reset are dropped, not shown in the new session
+      setPendingBackends([]);
       setMessages([]);
       setActiveDocument(null);
       setContextFacts({});
@@ -618,6 +673,7 @@ export default function Home() {
       <SettingsModal
         open={settingsOpen}
         settings={apiKeySettings}
+        envKeys={envKeys}
         onClose={() => setSettingsOpen(false)}
         onSave={handleSaveSettings}
       />
@@ -649,6 +705,8 @@ export default function Home() {
               messages={messages}
               onSend={handleSend}
               sending={sending}
+              pending={pendingBackends}
+              openaiAvailable={Boolean(oaOverride?.apiKey) || openaiConfigured}
               compact={documentFillsColumn}
               selectedExcerpt={selectedExcerpt}
               onRunExcerptAction={handleRunExcerptAction}

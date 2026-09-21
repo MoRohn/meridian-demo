@@ -32,7 +32,7 @@ export function openaiActivityResult(outcome: OpenAIRunOutcome | null | undefine
   return { status: "error", note: outcome?.message };
 }
 
-/** A written chat answer as an activity: timed on its own, and left out of both backends' speed and cost. Null when no model wrote it. */
+/** A written chat answer as an activity: timed and priced on its own in the activity trace. It is added back to its backend's turn as the LLM response (time and cost), never mixed into the backend's reasoning figures. Null when no model wrote it. */
 export function writerActivityResult(answer: TurnAnswer | null | undefined): ActivityFinish | null {
   if (answer?.source !== "model") return null;
   return { status: "done", modelMs: answer.elapsedMs, model: answer.model, inputTokens: answer.usage?.input_tokens, outputTokens: answer.usage?.output_tokens, costUsd: answer.costUsd };

@@ -34,8 +34,8 @@ describe("cell", () => {
 
 describe("buildReportTable", () => {
   const evals = [
-    row("risk", "typesafe", "risk", result(0.85), { response: { ms: 2400, costUsd: 0.00042 } }),
-    row("risk", "openai", "risk", result(0.4), { response: { ms: 850, costUsd: 0 } }),
+    row("risk", "typesafe", "risk", result(0.85), { response: { ms: 2400, reasoningMs: 900, writingMs: 1500, costUsd: 0.00142, reasoningCostUsd: 0.00042, writingCostUsd: 0.001 } }),
+    row("risk", "openai", "risk", result(0.4), { response: { ms: 850, reasoningMs: 850, writingMs: null, costUsd: 0, reasoningCostUsd: 0, writingCostUsd: null } }),
     row("citation", "typesafe", "citation", result(0.9)),
     row("compliance:excerpt", "typesafe", "compliance", result(0.7)),
   ];
@@ -60,29 +60,35 @@ describe("buildReportTable", () => {
     expect(ts[col("Result")]).toBe("Pass");
     expect(ts[col("Band (0-10)")]).toBe("6-10");
     expect(ts[col("Rubric")]).toBe("risk v2");
-    expect(ts[col("Resp. time")]).toBe("2.4s");
-    expect(ts[col("Resp. cost")]).toBe(fmtUsd(0.00042));
+    expect(ts[col("Model total time")]).toBe("2.4s");
+    expect(ts[col("Total cost")]).toBe(fmtUsd(0.00142));
     expect(oa[col("Score")]).toBe("40%");
     expect(oa[col("Result")]).toBe("Fail");
   });
 
-  it("shows the answering model's response time and cost, not the judge's, and drops the judge columns", () => {
-    expect(table.columns).not.toContain("Judge time");
-    expect(table.columns).not.toContain("Judge cost");
-    expect(table.columns).not.toContain("Judge model");
-    expect(table.columns.indexOf("Resp. cost")).toBe(table.columns.indexOf("Resp. time") + 1);
-    const [, oa] = table.rows;
-    expect(oa[col("Resp. time")]).toBe("850ms");
-    expect(oa[col("Resp. cost")]).toBe(fmtUsd(0)); // a call that really cost nothing is a cost, not n/a
+  it("shows the answering model's three times and three costs, not the judge's, and has no Integrity or judge columns", () => {
+    for (const gone of ["Integrity", "Resp. time", "Resp. cost", "Judge time", "Judge cost", "Judge model"]) expect(table.columns).not.toContain(gone);
+    const c = table.columns;
+    expect(c.slice(c.indexOf("Model total time"), c.indexOf("Model total time") + 6)).toEqual([
+      "Model total time", "Model reasoning", "LLM response", "Total cost", "Cost for reasoning", "Cost for LLM response",
+    ]);
+    const [ts, oa] = table.rows;
+    expect([ts[col("Model total time")], ts[col("Model reasoning")], ts[col("LLM response")]]).toEqual(["2.4s", "900ms", "1.5s"]);
+    expect([ts[col("Total cost")], ts[col("Cost for reasoning")], ts[col("Cost for LLM response")]]).toEqual([fmtUsd(0.00142), fmtUsd(0.00042), fmtUsd(0.001)]);
+    // The total is the two parts added together.
+    expect(0.00042 + 0.001).toBeCloseTo(0.00142, 9);
+    expect(oa[col("Model total time")]).toBe("850ms");
+    expect(oa[col("LLM response")]).toBe("n/a"); // no model wrote it
+    expect(oa[col("Cost for LLM response")]).toBe("n/a");
+    expect(oa[col("Total cost")]).toBe(fmtUsd(0)); // a call that really cost nothing is a cost, not n/a
   });
 
   it("writes n/a, never zero, when no call was measured behind an answer", () => {
     const [, , citationTs] = table.rows; // the citation row was stored without a response
-    expect(citationTs[col("Resp. time")]).toBe("n/a");
-    expect(citationTs[col("Resp. cost")]).toBe("n/a");
-    const noMs = buildReportTable([row("risk", "typesafe", "risk", result(0.8), { response: { ms: null, costUsd: 0.001 } })]);
-    expect(noMs.rows[0][col("Resp. time")]).toBe("n/a");
-    expect(noMs.rows[0][col("Resp. cost")]).toBe(fmtUsd(0.001));
+    for (const name of ["Model total time", "Model reasoning", "LLM response", "Total cost", "Cost for reasoning", "Cost for LLM response"]) expect(citationTs[col(name)]).toBe("n/a");
+    const noMs = buildReportTable([row("risk", "typesafe", "risk", result(0.8), { response: { ms: null, reasoningMs: null, writingMs: null, costUsd: 0.001, reasoningCostUsd: 0.001, writingCostUsd: null } })]);
+    expect(noMs.rows[0][col("Model total time")]).toBe("n/a");
+    expect(noMs.rows[0][col("Total cost")]).toBe(fmtUsd(0.001));
   });
 
   it("shows why a model has no score instead of a zero", () => {

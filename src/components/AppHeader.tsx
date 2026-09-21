@@ -1,6 +1,6 @@
 "use client";
 
-import { elapsedOf, formatElapsed, type ActivityActor } from "@/lib/activity/log";
+import { formatElapsed, shownElapsed, type ActivityActor } from "@/lib/activity/log";
 import { useActivities, useCurrentActivity, useNow } from "@/lib/activity/hooks";
 import { Icon } from "./Icon";
 import { ThemeControl } from "./ThemeControl";
@@ -19,8 +19,6 @@ function TimerPill({
   idleLabel,
   activeText,
   inactiveText,
-  hideWhenIdle = false,
-  dotOnPhone = false,
 }: {
   name: string;
   actor: ActivityActor;
@@ -29,16 +27,11 @@ function TimerPill({
   idleLabel: string;
   activeText: string;
   inactiveText: string;
-  /** For a model that only appears once it has done something (the judge). */
-  hideWhenIdle?: boolean;
-  /** Below the sm breakpoint show just the status dot (the name stays for screen readers): a third pill would not fit a phone's header. */
-  dotOnPhone?: boolean;
 }) {
   const activity = useCurrentActivity(actor);
   const status = activity?.status ?? "idle";
   const now = useNow(status === "pending");
-  if (hideWhenIdle && !activity) return null;
-  const elapsed = activity ? elapsedOf(activity, now) : null;
+  const elapsed = activity ? shownElapsed(activity, now) : null;
 
   // The detail is the first thing to go on a narrow header; an in-flight call is the exception, since it is live feedback.
   let detail = idleLabel;
@@ -62,14 +55,19 @@ function TimerPill({
           ? "border-deep/15 bg-deep/[0.06] text-deep"
           : "border-border-strong bg-surface text-muted"
       }`}
-      title={activity ? `${activity.label} · ${active ? activeText : inactiveText}` : active ? activeText : inactiveText}
+      title={
+        activity
+          ? `${activity.label} · ${active ? activeText : inactiveText}` +
+            (activity.kind === "chat" && activity.status === "done" && activity.modelMs != null ? ` · model total time; model reasoning took ${formatElapsed(activity.modelMs)}` : "")
+          : active ? activeText : inactiveText
+      }
     >
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotColor}`} />
-      <span className={dotOnPhone ? "sr-only sm:not-sr-only" : undefined}>
+      <span>
         {name.replace(/ AI$/, "")}
         <span className="hidden sm:inline">{name.endsWith(" AI") ? " AI" : ""}</span>
       </span>
-      <span className={detailAlwaysVisible && !dotOnPhone ? "" : "hidden sm:inline"}>· {detail}</span>
+      <span className={detailAlwaysVisible ? "" : "hidden sm:inline"}>· {detail}</span>
     </div>
   );
 }
@@ -102,7 +100,7 @@ export function AppHeader({
         </svg>
         <div className="min-w-0 leading-tight max-[429px]:sr-only">
           <h1 className="truncate font-serif text-lg font-extrabold tracking-tight text-deep">Meridian</h1>
-          <p className="hidden text-sm font-medium text-muted md:block">AI Context Intake &amp; Contract Risk Copilot</p>
+          <p className="hidden text-sm font-medium text-muted md:block">Contract Risk &amp; Compliance AI Evaluation Tool</p>
         </div>
       </div>
       {/* Wraps rather than widening the page: two live timers plus the theme and settings buttons do not fit a phone in one row. */}
@@ -122,16 +120,6 @@ export function AppHeader({
           idleLabel={openaiConfigured ? "Live" : "not configured"}
           activeText="Running a live comparison call against OpenAI"
           inactiveText="No OPENAI_API_KEY — Compare tab shows a structural estimate"
-        />
-        <TimerPill
-          name="Judge"
-          actor="judge"
-          active
-          hideWhenIdle
-          dotOnPhone
-          idleLabel="idle"
-          activeText="The independent DeepEval judge scoring an answer"
-          inactiveText="The independent DeepEval judge"
         />
         <ThemeControl />
         <ReportMenu disabled={!hasActivity} onDownload={onDownloadReport} />
