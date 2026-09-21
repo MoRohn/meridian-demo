@@ -25,7 +25,7 @@ const lora = Lora({
 });
 
 export const metadata: Metadata = {
-  title: "Meridian — AI Context Intake Copilot",
+  title: "Meridian | Contract Risk & Compliance AI Evaluation Tool",
   description: "A legal contract risk & compliance copilot built on TypeSafe Jev.",
 };
 

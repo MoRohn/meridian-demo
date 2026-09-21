@@ -64,9 +64,11 @@ async function waitUntilReady(url, timeoutMs = 30_000) {
 
 function banner() {
   console.log("");
-  console.log("  ╭─────────────────────────────────────────────╮");
-  console.log("  │   Meridian — AI Context Intake Copilot       │");
-  console.log("  ╰─────────────────────────────────────────────╯");
+  const title = "Meridian | Contract Risk & Compliance AI Evaluation Tool";
+  const rule = "─".repeat(title.length + 6);
+  console.log(`  ╭${rule}╮`);
+  console.log(`  │   ${title}   │`);
+  console.log(`  ╰${rule}╯`);
   console.log("");
 }
 
