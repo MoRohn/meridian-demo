@@ -20,8 +20,12 @@ export interface ComplianceFlag {
  */
 export const INTENT_CONFIDENCE_FLOOR = 0.35;
 const CONTRACT_TYPE_CONFIDENCE_FLOOR = 0.4;
-const GUARDRAIL_TRIGGER = 0.6;
-const COMPLIANCE_FLAG_THRESHOLD = 0.55;
+/** A guardrail question at or above this probability blocks the turn. */
+export const GUARDRAIL_TRIGGER = 0.6;
+/** A compliance check at or above this probability is flagged. */
+export const COMPLIANCE_FLAG_THRESHOLD = 0.55;
+/** A risk rating below this model confidence gets an "have an attorney confirm" hedge in the reply. */
+export const LOW_CONFIDENCE_HEDGE = 0.5;
 
 export function buildComplianceFlags(answers: Record<string, Answer>): ComplianceFlag[] {
   return (Object.keys(COMPLIANCE_CHECKS) as ComplianceCheckId[])
@@ -67,7 +71,7 @@ function composeAnalysisReply(
     lines.push("No compliance flags tripped the threshold on this pass.");
   }
 
-  if (risk.lowestConfidence < 0.5) {
+  if (risk.lowestConfidence < LOW_CONFIDENCE_HEDGE) {
     lines.push(
       "One of those scores came back with low model confidence — treat it as a starting point and have an attorney confirm before relying on it."
     );

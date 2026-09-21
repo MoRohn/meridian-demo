@@ -209,7 +209,21 @@ def stats():
 
 @app.get("/rubrics")
 def rubrics():
-    return {k: {"version": r.version, "title": r.title, "steps": list(r.steps)} for k, r in RUBRICS.items()}
+    """Every rubric in full, for the app's "Scoring Rubric" view: what it judges, the steps the judge follows verbatim (with a short label and
+    summary for each), the score bands over 0-10, and the pass mark. This file's rubrics.py stays the only place the wording lives."""
+    return {
+        k: {
+            "id": r.id,
+            "version": r.version,
+            "title": r.title,
+            "task_line": r.task_line,
+            "steps": list(r.steps),
+            "outline": [{"label": label, "summary": summary} for label, summary in r.outline],
+            "bands": [{"low": lo, "high": hi, "outcome": outcome} for lo, hi, outcome in r.bands],
+            "pass_threshold": PASS_THRESHOLD,
+        }
+        for k, r in RUBRICS.items()
+    }
 
 
 # ---- evaluation -----------------------------------------------------------

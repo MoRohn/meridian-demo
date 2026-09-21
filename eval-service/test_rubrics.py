@@ -64,3 +64,15 @@ def test_compliance_arithmetic_and_its_bands_agree():
     assert band(10) == 3
     assert band(10 - missed) == 1 and band(10 - false_alarm) == 1  # exactly one wrong decision
     assert band(max(0, min(3, 10 - missed - false_alarm))) == 0  # two or more wrong: at most 3, never below 0
+
+
+def test_every_step_has_a_short_label_and_summary_for_readers():
+    for kind, r in RUBRICS.items():
+        assert len(r.outline) == len(r.steps), kind
+        labels = [label for label, _ in r.outline]
+        assert len(set(labels)) == len(labels), f"{kind}: labels must be distinct"
+        for label, summary in r.outline:
+            assert 0 < len(label) <= 28, (kind, label)
+            assert 0 < len(summary) <= 130, (kind, summary)
+        # The outline is a summary, never a substitute: each one is shorter than the wording it stands for.
+        assert all(len(summary) < len(step) for (_, summary), step in zip(r.outline, r.steps)), kind

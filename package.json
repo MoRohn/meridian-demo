@@ -18,6 +18,7 @@
     "test:e2e:citations": "node e2e/citations.mjs",
     "test:e2e:pages": "node e2e/pages.mjs",
     "test:e2e:settings": "node e2e/settings.mjs",
+    "test:e2e:rubrics": "node e2e/rubrics.mjs",
     "check:report": "node e2e/check-report.mjs",
     "eval-service": "node scripts/eval-service.mjs start",
     "eval-service:setup": "node scripts/eval-service.mjs setup"

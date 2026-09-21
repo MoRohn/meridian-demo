@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
+import { RubricButton } from "./RubricButton";
 
 export type WorkspaceTab = "trace" | "risk" | "compliance" | "citation";
 
@@ -52,7 +53,14 @@ export function Workspace({
           );
         })}
       </div>
-      <div key={active} tabIndex={0} role="tabpanel" aria-label={`${active} results`} className="@container animate-in flex-1 overflow-y-auto p-3 pb-12 sm:p-4 sm:pb-12">
+      <div key={active} tabIndex={0} role="tabpanel" aria-label={`${active} results`} className="@container animate-in relative flex-1 overflow-y-auto p-3 pb-12 sm:p-4 sm:pb-12">
+        {/* The same button on every page: it opens the rules this page is scored against (all of them, on Trace). */}
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="min-w-0 truncate text-xs text-muted max-[479px]:hidden">Scored by an independent judge against fixed, versioned rules.</p>
+          <div className="ml-auto">
+            <RubricButton page={active} />
+          </div>
+        </div>
         {tabs[active]}
       </div>
     </div>

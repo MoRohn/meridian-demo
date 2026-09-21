@@ -82,6 +82,17 @@ def test_rubrics_endpoint_exposes_fixed_steps():
     assert body["risk"]["steps"] == list(RUBRICS["risk"].steps)
 
 
+def test_rubrics_endpoint_exposes_every_rubric_in_full():
+    body = client.get("/rubrics").json()
+    assert set(body) == set(RUBRICS)
+    for kind, r in RUBRICS.items():
+        got = body[kind]
+        assert got["id"] == kind and got["version"] == r.version and got["title"] == r.title and got["task_line"] == r.task_line
+        assert got["bands"] == [{"low": lo, "high": hi, "outcome": o} for lo, hi, o in r.bands]
+        assert got["outline"] == [{"label": a, "summary": b} for a, b in r.outline]
+        assert got["pass_threshold"] == main.PASS_THRESHOLD
+
+
 def test_happy_path_returns_full_standardized_shape():
     r = client.post("/evaluate", json=VALID)
     assert r.status_code == 200

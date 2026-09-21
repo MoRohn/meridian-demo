@@ -14,6 +14,27 @@ Every tab that shows a judgment has the same panel: a title and one-line subtitl
 backend with the metrics first (score, pass threshold, judge model, rubric version, latency) and the messages below: the
 judge's verdict, any untrusted-content warning, the exact evidence the judge saw, and the fixed steps it followed.
 
+## Seeing the scoring rules
+
+Every analysis page (Trace, Risk, Compliance, Citations) has the same **Scoring Rubric** button at the top right. It opens a
+scrollable dialog in two parts:
+
+- **How answers are scored** is the independent judge's rubric for that page: what it judges, its steps (each a short label and
+  a one-line summary, with the exact wording one click away), the 0 to 10 score bands coloured by whether they pass, the pass
+  mark, and the rubric's version. Risk, Compliance and Citations show their own rubric; Trace scores the chat reply and
+  compares everything, so it shows all four, with chips to jump between them.
+- **How Meridian decides** is the rules the application itself applies to produce those answers: the risk dimensions with
+  their weights and three-level scales and the risk bands; the four compliance checks and their flag threshold; how citations
+  are found (cross-references, legal citations, attachments, key terms), who decides each kind and what the verdicts mean; and
+  the guardrails on every message. Risk, Compliance (with the guardrails) and Citations each show theirs; Trace shows all of it.
+
+Neither part is retyped in the app. The judge's rubric is read from the evaluation service (`GET /rubrics`, proxied by
+`/api/rubrics`), so it changes only where the rubric does ([`eval-service/rubrics.py`](../eval-service/rubrics.py), where each
+step's label and summary sit beside its exact wording, as display copy that never changes a score). Meridian's rules are built
+from the same constants and question definitions the app runs on ([`src/lib/rules/guide.ts`](../src/lib/rules/guide.ts)), so
+the page cannot describe a weight, threshold or check the code does not use. If the evaluation service is not running, the
+judge's part says so and how to start it, and Meridian's rules still show.
+
 ## What makes the score trustworthy
 
 - **Like-for-like.** Both backends' answers are rendered by the same packet builder
