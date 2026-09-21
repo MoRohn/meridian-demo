@@ -52,6 +52,8 @@ export interface TurnResult {
   context: ContextStats;
   /** Where `reply` came from: a model, the document's own clauses, or Meridian's templates. `elapsedMs` above is the Jev call only. */
   answer: TurnAnswer;
+  /** Set when a TypeSafe key was supplied but the demo heuristic answered (a rejected key, a timeout), so `source: "mock"` is not mistaken for "no key". */
+  fallbackReason?: string;
 }
 
 export interface TurnRequest {
@@ -94,7 +96,7 @@ export function buildTurnRequest(session: SessionState, message: string): TurnRe
  * owns the conversation, exactly as recommended in
  * docs.typesafe.ai/concepts/how-to-build-with-system-one.
  */
-export async function handleTurn(session: SessionState, message: string, override?: KeyOverride, writerOverride?: KeyOverride): Promise<TurnResult> {
+export async function handleTurn(session: SessionState, message: string, override?: KeyOverride, writerOverride?: KeyOverride, signal?: AbortSignal): Promise<TurnResult> {
   const { stateJson, questions, owner } = buildTurnRequest(session, message);
   const contextStats: ContextStats = {
     bytes: typesafeRequestBytes(stateJson, questions),
@@ -103,7 +105,9 @@ export async function handleTurn(session: SessionState, message: string, overrid
     historyTurnsIncluded: userTurns(stateJson.conversation) + 1,
     historyTurnsTotal: userTurns(session.history) + 1,
   };
-  const response = await systemOne(stateJson, questions, override);
+  // Bounded by the client's own deadline, and stopped when the caller goes away. Aborted here, the turn throws before it is
+  // added to the history, so an abandoned message leaves no half-finished turn behind.
+  const response = await systemOne(stateJson, questions, override, signal);
   const answers = response.answers;
   const composed = composeTurn(session, answers);
   const { intent: intentSummary, risk, complianceFlags, blocked, used, contractType } = composed;
@@ -136,5 +140,6 @@ export async function handleTurn(session: SessionState, message: string, overrid
     elapsedMs: response.elapsedMs,
     context: contextStats,
     answer,
+    ...(response.fallbackReason ? { fallbackReason: response.fallbackReason } : {}),
   };
 }

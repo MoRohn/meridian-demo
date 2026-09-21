@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
   const ids = parsed.checks.map((c) => c.id);
   try {
     if (parsed.backend === "typesafe") {
-      const response = await systemOne(batch.state, batch.questions, parsed.override);
+      const response = await systemOne(batch.state, batch.questions, parsed.override, req.signal);
       const result: CitationBatchResult = {
         ok: true,
         judged: judgedFromTypesafe(response.answers, ids),

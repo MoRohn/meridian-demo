@@ -48,6 +48,11 @@ export const citationSig = (documentKey: string, scope: "document" | "excerpt", 
 
 const MAX_RUNS = 12;
 const runs = new Map<string, CitationRun>();
+/**
+ * Keys that have already started a run: the run's own `sig`, and `${sig}|openai|${token}` for a late OpenAI start against it.
+ * A claim only means something while its run is remembered, so the two are removed together (see `forget`); a claim that
+ * outlived its run would stop that text from ever being checked again.
+ */
 const claimed = new Set<string>();
 const listeners = new Set<() => void>();
 let version = 0;
@@ -56,12 +61,20 @@ const emit = () => {
   listeners.forEach((l) => l());
 };
 
+/** Removes a run and every claim made on its behalf, so the same text can be checked again and nothing is left behind. */
+function forget(sig: string) {
+  runs.delete(sig);
+  for (const key of claimed) if (key === sig || key.startsWith(`${sig}|`)) claimed.delete(key);
+}
+
 export const citationStore = {
   get: (sig: string): CitationRun | undefined => runs.get(sig),
   set(run: CitationRun) {
     runs.delete(run.sig); // most recently written last, so the oldest is the one dropped
     runs.set(run.sig, run);
-    while (runs.size > MAX_RUNS) runs.delete(runs.keys().next().value as string);
+    // The oldest run is dropped along with its claims: left behind, they would grow without bound, and a claimed text with no
+    // run would show nothing and never start again.
+    while (runs.size > MAX_RUNS) forget(runs.keys().next().value as string);
     emit();
   },
   /** Applies a change to a run if it is still there; a run cleared by a reset meanwhile is left alone. */
@@ -80,8 +93,7 @@ export const citationStore = {
   },
   /** Forgets one run so the next visit runs it again. */
   drop(sig: string) {
-    runs.delete(sig);
-    claimed.delete(sig);
+    forget(sig);
     emit();
   },
   /** A new session starts clean. */

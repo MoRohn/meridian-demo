@@ -66,6 +66,11 @@ export interface SystemOneResponse {
   source: "live" | "mock";
   /** Wall-clock time for this call, measured client-side. Not part of the real API. */
   elapsedMs: number;
+  /**
+   * Set when a key was supplied but the demo heuristic answered anyway (the key was rejected, the call failed or timed out),
+   * so a misconfiguration is not mistaken for the real model. Absent when there was simply no key. Not part of the real API.
+   */
+  fallbackReason?: string;
 }
 
 /**

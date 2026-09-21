@@ -35,7 +35,7 @@ function CellView({ cell }: { cell: Cell }) {
 }
 
 /**
- * The one results table. Trace, Risk, Compliance and Citations all draw their comparison with this: items down the side
+ * The one results table. Risk, Compliance and Citations all draw their comparison with this: items down the side
  * (grouped, each group under one header row), TypeSafe's answer to each, OpenAI's answer to the identical item, and whether
  * they agree. Each answer is a headline with its supporting figures and a small bar; anything longer is in the tooltip.
  * On a phone the Match column shrinks to an icon.
@@ -44,19 +44,16 @@ export function ComparisonTable({
   groups,
   label,
   firstColumn,
-  dimmed = false,
 }: {
   groups: CompareGroup[];
   /** The table's accessible name. */
   label: string;
-  /** The heading of the first column: "Question", "Dimension", "Check". */
+  /** The heading of the first column: "Rating", "Check". */
   firstColumn: string;
-  /** Marks rows the result did not rely on (Trace's speculative questions). */
-  dimmed?: boolean;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-surface">
-      <table aria-label={label} className={`w-full table-fixed border-collapse text-xs ${dimmed ? "opacity-75" : ""}`}>
+      <table aria-label={label} className="w-full table-fixed border-collapse text-xs">
         <colgroup>
           <col />
           <col className="w-[31%] min-[480px]:w-[29%]" />

@@ -22,7 +22,12 @@ const check = (ok, label, detail = "") => {
 };
 
 const browser = await chromium.launch(process.env.E2E_CHROME_PATH ? { executablePath: process.env.E2E_CHROME_PATH, headless: true } : { channel: "chrome", headless: true });
-const saved = (page) => page.evaluate(() => JSON.parse(localStorage.getItem("meridian.apiKeys") ?? "null"));
+// Keys are kept for the tab (sessionStorage) unless "Remember" is on, so what was saved is the two together.
+const saved = (page) =>
+  page.evaluate(() => {
+    const local = JSON.parse(localStorage.getItem("meridian.apiKeys") ?? "null");
+    return local ? { ...local, ...JSON.parse(sessionStorage.getItem("meridian.apiKeys.session") ?? "{}") } : null;
+  });
 
 for (const [name, width, height] of [["desktop", 1440, 900], ["phone", 390, 844]]) {
   const ctx = await browser.newContext({ viewport: { width, height }, hasTouch: width < 800 });

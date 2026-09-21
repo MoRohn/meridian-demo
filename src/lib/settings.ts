@@ -1,10 +1,16 @@
 /**
  * User-supplied API keys, entered through the Settings modal (⚙ in the
- * header). Stored in localStorage only — never sent anywhere except as the
+ * header). They live in the browser only — never sent anywhere except as the
  * body of the app's own API requests, and never written into the in-memory
  * session store server-side. A key entered here always takes priority over
  * the corresponding environment variable for that request; see
  * src/lib/typesafe/client.ts and src/lib/openai/client.ts.
+ *
+ * Where they live is the reader's choice. By default the keys are kept in
+ * sessionStorage: gone when the tab closes, so a key is never left on disk for a
+ * script, an extension or the next person at the machine to read later. Ticking
+ * "Remember on this device" keeps them in localStorage instead. Everything that is
+ * not a secret (models, the judge choice, auto-evaluate) is always remembered.
  */
 export interface ApiKeySettings {
   typesafeApiKey: string;
@@ -22,6 +28,11 @@ export interface ApiKeySettings {
   judgeModel: string;
   /** The judge's own key. For a different OpenAI judge it may stay blank to reuse the OpenAI key above. */
   judgeApiKey: string;
+  /**
+   * Keep the keys on this device (localStorage) instead of for this tab only (sessionStorage). Off by default. Settings
+   * saved before this option existed that already hold a key count as on, so an upgrade never makes a reader re-enter them.
+   */
+  rememberKeys?: boolean;
 }
 
 /** Which company's model judges. */
@@ -92,7 +103,14 @@ export const OPENAI_MODELS: ModelOption[] = [
 export const DEFAULT_TYPESAFE_MODEL = TYPESAFE_MODELS[0].id;
 export const DEFAULT_OPENAI_MODEL = OPENAI_MODELS[0].id;
 
+/** Everything that is remembered across visits. Holds the keys too only when `rememberKeys` is on. */
 const STORAGE_KEY = "meridian.apiKeys";
+/** The keys, for this tab only, when they are not remembered. */
+const SESSION_KEY = "meridian.apiKeys.session";
+
+const KEY_FIELDS = ["typesafeApiKey", "openaiApiKey", "judgeApiKey"] as const;
+type KeyField = (typeof KEY_FIELDS)[number];
+type KeySet = Partial<Record<KeyField, string>>;
 
 export const emptySettings: ApiKeySettings = {
   typesafeApiKey: "",
@@ -103,26 +121,52 @@ export const emptySettings: ApiKeySettings = {
   judgeProvider: "saved",
   judgeModel: "",
   judgeApiKey: "",
+  rememberKeys: false,
 };
 
-export function loadSettings(): ApiKeySettings {
-  if (typeof window === "undefined") return emptySettings;
+const hasKeys = (s: KeySet) => KEY_FIELDS.some((f) => typeof s[f] === "string" && s[f]!.trim() !== "");
+const keysOf = (s: KeySet): KeySet => Object.fromEntries(KEY_FIELDS.filter((f) => typeof s[f] === "string").map((f) => [f, s[f]])) as KeySet;
+const withoutKeys = (s: ApiKeySettings): ApiKeySettings => ({ ...s, typesafeApiKey: "", openaiApiKey: "", judgeApiKey: "" });
+
+/** A storage area, or null when the browser has none (private windows and blocked site data can throw on access). */
+function area(kind: "localStorage" | "sessionStorage"): Storage | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return emptySettings;
-    const parsed = JSON.parse(raw) as Partial<ApiKeySettings>;
-    return { ...emptySettings, ...parsed };
+    return typeof window === "undefined" ? null : (window[kind] ?? null);
   } catch {
-    return emptySettings;
+    return null;
   }
 }
 
-export function saveSettings(settings: ApiKeySettings): void {
-  if (typeof window === "undefined") return;
+function readJson<T>(store: Storage | null, key: string): T | null {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    const raw = store?.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
   } catch {
-    // localStorage unavailable (private browsing, quota) — keys just won't persist across reloads.
+    return null;
+  }
+}
+
+export function loadSettings(): ApiKeySettings {
+  if (typeof window === "undefined") return emptySettings;
+  const saved = readJson<Partial<ApiKeySettings>>(area("localStorage"), STORAGE_KEY);
+  if (!saved) return { ...emptySettings, ...keysOf(readJson<KeySet>(area("sessionStorage"), SESSION_KEY) ?? {}) };
+  // Settings from before this option that hold a key were saved on this device, so they stay there.
+  const remember = saved.rememberKeys ?? hasKeys(saved);
+  const tabKeys = remember ? {} : keysOf(readJson<KeySet>(area("sessionStorage"), SESSION_KEY) ?? {});
+  return { ...emptySettings, ...saved, ...tabKeys, rememberKeys: remember };
+}
+
+export function saveSettings(settings: ApiKeySettings): void {
+  const local = area("localStorage");
+  const session = area("sessionStorage");
+  const remember = Boolean(settings.rememberKeys);
+  try {
+    // Off the device unless asked: the remembered copy holds no key, and the keys go to this tab's storage instead.
+    local?.setItem(STORAGE_KEY, JSON.stringify(remember ? settings : { ...withoutKeys(settings), rememberKeys: false }));
+    if (remember || !hasKeys(settings)) session?.removeItem(SESSION_KEY);
+    else session?.setItem(SESSION_KEY, JSON.stringify(keysOf(settings)));
+  } catch {
+    // Storage unavailable (private browsing, quota): the settings still apply to this page, they just won't outlive it.
   }
 }
 

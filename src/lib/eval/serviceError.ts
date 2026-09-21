@@ -21,6 +21,8 @@ export const JUDGE_FAILURE_TITLES: Record<string, string> = {
   judge_provider_error: "Judge provider error",
   judge_bad_output: "Judge answer unreadable",
   judge_bad_score: "Judge score invalid",
+  judge_busy: "Judge is busy",
+  judge_timeout: "Judge timed out",
   service_offline: "Evaluation service not running",
 };
 

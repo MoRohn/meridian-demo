@@ -3,6 +3,7 @@ import { openaiActivityResult, typesafeActivityResult } from "../activity/outcom
 import type { KeyOverride } from "../typesafe/client";
 import type { CitationBatchResult } from "@/app/api/citations/route";
 import type { Extraction } from "./extract";
+import { postJson, SLOW_REQUEST_TIMEOUT_MS } from "../api/request";
 import { citationStore, emptySide, type SideRun } from "./store";
 
 /** What a run needs from the page: the saved keys, and the same activity and meter hooks every model call reports to. */
@@ -18,10 +19,7 @@ export interface RunDeps {
 async function callBatch(backend: "typesafe" | "openai", extraction: Extraction, override: KeyOverride | undefined): Promise<CitationBatchResult> {
   const checks = extraction.checks.filter((c) => c.resolution === "model").map((c) => ({ id: c.id, claim: c.claim, source: c.source! }));
   try {
-    const res = await fetch("/api/citations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ backend, checks, override }) });
-    const data = await res.json();
-    if (!res.ok) return { ok: false, reason: "error", message: data?.error ?? `Request failed (${res.status})` };
-    return data as CitationBatchResult;
+    return await postJson<CitationBatchResult>("/api/citations", { backend, checks, override }, { timeoutMs: SLOW_REQUEST_TIMEOUT_MS });
   } catch (err) {
     return { ok: false, reason: "error", message: (err as Error).message };
   }

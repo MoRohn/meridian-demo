@@ -28,8 +28,9 @@ const CUSTOM = "__custom__";
  * variable for every request this app makes (chat turns, citation checks,
  * excerpt analysis, and both OpenAI comparison calls) — see
  * src/lib/settings.ts and the `override` params threaded through
- * src/lib/typesafe/client.ts / src/lib/openai/client.ts. Keys live only in
- * localStorage; the native `type="password"` input is what gives the
+ * src/lib/typesafe/client.ts / src/lib/openai/client.ts. Keys live only in the
+ * browser: for this tab by default, or on the device when "Remember" is ticked
+ * (see settings.ts). The native `type="password"` input is what gives the
  * "hidden, just dots after saved" behavior for free.
  */
 export function SettingsModal({
@@ -252,6 +253,24 @@ export function SettingsModal({
 
           <p className="rounded-lg border border-emerald-600/25 bg-emerald-600/[0.06] px-3 py-2 text-xs leading-relaxed text-emerald-900">{JUDGE_RECOMMENDATION}</p>
         </fieldset>
+
+        <div className="my-4 border-t border-border" />
+
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            checked={Boolean(draft.rememberKeys)}
+            onChange={(e) => update("rememberKeys", e.target.checked)}
+            className="mt-1 h-4 w-4 shrink-0 accent-[var(--deep)]"
+          />
+          <span className="text-sm">
+            <span className="block font-bold text-foreground">Remember my keys on this device</span>
+            <span className="block text-xs leading-relaxed text-muted">
+              Off by default: keys are kept for this browser tab only and are gone when you close it. Turn it on to keep them across visits, and
+              only on a computer you trust: anything running on this page, or a browser extension, can read a remembered key.
+            </span>
+          </span>
+        </label>
 
         <div className="my-4 border-t border-border" />
 

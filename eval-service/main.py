@@ -84,7 +84,14 @@ PASS_THRESHOLD = judge.PASS_THRESHOLD
 # one to answer "too slow"), and only a fixed number may be in flight, so a burst of hung calls cannot exhaust the process.
 JUDGE_TIMEOUT_S: float = judge.env_number("EVAL_JUDGE_TIMEOUT_S", 45, 1, 600)
 MAX_CONCURRENT_JUDGES: int = judge.env_number("EVAL_MAX_CONCURRENT", 8, 1, 64, cast=int)
+# A pool bounds how many calls RUN, not how many wait: its queue has no limit. So admission is bounded separately: at most
+# MAX_CONCURRENT_JUDGES running plus MAX_QUEUED_JUDGES waiting, and a request beyond that is refused at once (429 judge_busy)
+# instead of queueing behind calls it would only time out waiting for.
+MAX_QUEUED_JUDGES: int = judge.env_number("EVAL_MAX_QUEUED", 16, 0, 1000, cast=int)
 _judge_pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JUDGES, thread_name_prefix="judge")
+_judge_slots = threading.BoundedSemaphore(MAX_CONCURRENT_JUDGES + MAX_QUEUED_JUDGES)
+# How long a refused caller is told to wait: about one judge call, since that is how long a slot takes to free up.
+BUSY_RETRY_AFTER_S = 10
 
 # Optional shared secret. When EVAL_SERVICE_TOKEN is set, /evaluate and /stats require it in the X-Eval-Token header
 # (Meridian's server sends it; `npm run meridian` generates one for the pair it starts). Without it the service trusts its
@@ -245,13 +252,27 @@ class JudgeTimeout(Exception):
     """The judge call did not finish within JUDGE_TIMEOUT_S."""
 
 
+class JudgeBusy(Exception):
+    """Every judge slot (running or waiting) is taken; this call was not started."""
+
+
 def _measure_within_deadline(metric, test_case) -> None:
     """
     Runs `metric.measure` on the bounded judge pool and gives up after JUDGE_TIMEOUT_S. A thread cannot be killed, so a call
-    that has already started keeps running until its provider answers or its own client gives up; the pool size is what
-    bounds how many can pile up. A call still waiting for a free thread is cancelled outright.
+    that has already started keeps running until its provider answers or its own client gives up. It therefore keeps its slot
+    until it really ends, which is what stops a burst of hung calls from piling up: the slots, not the caller's patience, are
+    the limit. A call still waiting for a free thread is cancelled outright, and frees its slot at once. When no slot is free
+    the call is refused (`JudgeBusy`) without being started.
     """
-    future = _judge_pool.submit(metric.measure, test_case)
+    if not _judge_slots.acquire(blocking=False):
+        raise JudgeBusy
+    try:
+        future = _judge_pool.submit(metric.measure, test_case)
+    except BaseException:
+        _judge_slots.release()
+        raise
+    # Runs when the call finishes, fails or is cancelled: the one place a slot is given back.
+    future.add_done_callback(lambda _done: _judge_slots.release())
     try:
         future.result(timeout=JUDGE_TIMEOUT_S)
     except concurrent.futures.TimeoutError:
@@ -299,6 +320,15 @@ def evaluate(
     try:
         with judge_errors.holding(request_key):
             _measure_within_deadline(metric, test_case)
+    except JudgeBusy:
+        _record(req.kind, False, 0, error="judge_busy")
+        log.warning("eval_refused kind=%s backend=%s judge=%s error=judge_busy slots=%d", req.kind, req.backend, judge_model, MAX_CONCURRENT_JUDGES + MAX_QUEUED_JUDGES)
+        # 429, not 503: Meridian reads a 503 as "the judge is not configured", and this is a retry-soon condition.
+        raise HTTPException(
+            status_code=429,
+            headers={"Retry-After": str(BUSY_RETRY_AFTER_S)},
+            detail=f"G-Eval judge call failed (judge_busy): The evaluation service is handling as many judge calls as it allows ({MAX_CONCURRENT_JUDGES} running, up to {MAX_QUEUED_JUDGES} waiting). Try again in a few seconds.",
+        ) from None
     except JudgeTimeout:
         latency = int((time.perf_counter() - started) * 1000)
         _record(req.kind, False, latency, error="judge_timeout")

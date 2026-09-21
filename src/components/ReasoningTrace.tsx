@@ -2,7 +2,7 @@ import type { TraceEntry } from "@/lib/orchestrator/run";
 import type { OpenAIRunOutcome, OpenAITurn } from "@/lib/openai/types";
 import { agreementSummary } from "@/lib/compare/agreement";
 import { OpenAINote } from "./OpenAINote";
-import { TraceTable } from "./TraceTable";
+import { TurnAnalysis } from "./TurnAnalysis";
 import { RerunButton } from "./RerunButton";
 import { EvalSummaryBar } from "./EvalSummaryBar";
 import { noOpenAIAnswerReason } from "@/lib/openai/unavailable";
@@ -11,6 +11,18 @@ import { ActivityTrace, PerformancePanel } from "./ModelPerformance";
 import { buildReplyPacket } from "@/lib/eval/packets";
 import type { ComplianceFlag } from "@/lib/orchestrator/run";
 import type { CompositeRisk } from "@/lib/skills/clauseRisk";
+import type { TurnAnswer } from "@/lib/chat/answer";
+import { coverageOf } from "@/lib/trace/analysis";
+
+/** What the last chat turn decided, beyond the trace: the judgments its reply was composed from, whether a guardrail stopped it, and who wrote the reply. */
+export interface TurnJudgments {
+  risk: CompositeRisk | null;
+  flags: ComplianceFlag[];
+  blocked?: "privileged" | "injection" | null;
+  answer?: TurnAnswer | null;
+  /** Why the demo heuristic answered when a TypeSafe key was supplied. */
+  fallbackReason?: string | null;
+}
 
 export function ReasoningTrace({
   trace,
@@ -24,6 +36,7 @@ export function ReasoningTrace({
   documentText,
   judgments,
   openaiTurn,
+  hasDocument = false,
 }: {
   trace: TraceEntry[];
   source: "live" | "mock";
@@ -37,9 +50,11 @@ export function ReasoningTrace({
   lastReply?: string | null;
   documentText?: string | null;
   /** The risk and compliance judgments the reply was composed from, checked against the reply by the judge. */
-  judgments?: { risk: CompositeRisk | null; flags: ComplianceFlag[] } | null;
+  judgments?: TurnJudgments | null;
   /** The reply composed from OpenAI's answers by the same pipeline; evaluated alongside TypeSafe's. */
   openaiTurn?: OpenAITurn | null;
+  /** Whether a document is loaded, which decides whether an analysis route can run. */
+  hasDocument?: boolean;
 }) {
   // Model performance and the activity trace lead the page: they answer "how did the models do, and what ran" before any
   // per-question detail. Each renders nothing until there is something to show.
@@ -55,28 +70,28 @@ export function ReasoningTrace({
       <div className="space-y-3">
         {overview}
         <p className="text-sm text-secondary">
-          Send a message to see the Jev call: every applicable skill&rsquo;s questions asked together in one request, with
-          OpenAI&rsquo;s answer to the identical question beside each.
+          Send a message to trace how each model reached its answers: the path they took through the app&rsquo;s rules, the
+          probabilities behind the routing, how sure each model was, and where TypeSafe and OpenAI disagreed.
         </p>
       </div>
     );
   }
 
-  const usedEntries = trace.filter((e) => e.used);
-  const unusedEntries = trace.filter((e) => !e.used);
   const { agreed, compared } = agreementSummary(trace, openaiOutcome);
+  const { used } = coverageOf(trace, openaiOutcome);
 
   return (
     <div className="space-y-3">
       {overview}
 
-      <section aria-label="Jev call" className="space-y-2">
+      <section aria-label="Turn analysis" className="space-y-2">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <EvalSummaryBar
             icon="trace"
-            headline={`${trace.length} question${trace.length === 1 ? "" : "s"} in one call`}
+            headline="How each model reached its answers"
             stats={[
-              { label: "used:", value: `${usedEntries.length}/${trace.length}` },
+              { label: "questions:", value: `${trace.length} in one call` },
+              { label: "used:", value: `${used}/${trace.length}` },
               compared > 0
                 ? { label: "agree:", value: `${agreed}/${compared}`, tone: agreed === compared ? "emerald" : agreed === 0 ? "rose" : "amber" }
                 : { label: "agree:", value: "n/a" },
@@ -88,22 +103,20 @@ export function ReasoningTrace({
 
         {!openaiConfigured && (
           <p className="text-xs text-muted">
-            Set <code className="text-accent-soft-ink">OPENAI_API_KEY</code> to see OpenAI&rsquo;s answer beside each question.
+            Set <code className="text-accent-soft-ink">OPENAI_API_KEY</code> to trace OpenAI beside TypeSafe.
           </p>
         )}
         <OpenAINote outcome={openaiOutcome} />
 
-        <TraceTable entries={usedEntries} openaiOutcome={openaiOutcome} openaiConfigured={openaiConfigured} label="Questions the reply used" />
-
-        {unusedEntries.length > 0 && (
-          <details className="group">
-            <summary className="flex min-h-9 cursor-pointer list-none items-center gap-1.5 rounded-lg px-1 text-xs font-bold text-muted transition-colors hover:text-deep">
-              <span className="transition-transform group-open:rotate-90" aria-hidden>&rsaquo;</span>
-              {unusedEntries.length} speculative question{unusedEntries.length === 1 ? "" : "s"} fetched but not used this turn
-            </summary>
-            <TraceTable entries={unusedEntries} openaiOutcome={openaiOutcome} openaiConfigured={openaiConfigured} dimmed label="Speculative questions, not used" />
-          </details>
-        )}
+        <TurnAnalysis
+          trace={trace}
+          turn={{ risk: judgments?.risk ?? null, flags: judgments?.flags ?? [], blocked: judgments?.blocked ?? null, answer: judgments?.answer ?? null, fallbackReason: judgments?.fallbackReason ?? null }}
+          source={source}
+          openaiOutcome={openaiOutcome}
+          openaiTurn={openaiTurn ?? null}
+          openaiConfigured={openaiConfigured}
+          hasDocument={hasDocument}
+        />
       </section>
 
       {lastReply && (

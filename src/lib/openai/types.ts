@@ -22,6 +22,19 @@ export interface OpenAIRunResult {
   fallbackFrom?: string;
   /** Exact UTF-8 byte size of the JSON request body actually sent to OpenAI (system prompt + state + schema) — the real input footprint, not an estimate. */
   requestBytes: number;
+  /** Present for a reasoning-family model: whether it thought before answering, and what it said about that. Absent for models that do not reason. */
+  reasoning?: OpenAIReasoning;
+}
+
+export interface OpenAIReasoning {
+  /** How hard it was asked to think. "none" when reasoning was off or unavailable. */
+  effort: string;
+  /** The model's own summary of its reasoning. OpenAI returns a summary, never the raw chain of thought. Null when it returned none. */
+  summary: string | null;
+  /** Tokens spent reasoning, already inside `usage.output_tokens` and the cost. Null when not reported. */
+  tokens: number | null;
+  /** Why reasoning is off when it was expected to be on. */
+  note?: string;
 }
 
 /**

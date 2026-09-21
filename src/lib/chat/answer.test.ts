@@ -87,6 +87,21 @@ describe("writeReply with a model", () => {
     expect(plain).toMatchObject({ temperature: 0.3, max_completion_tokens: 1200 });
   });
 
+  it("gives the model call a deadline, and a stalled model leaves a template reply with a note instead of hanging the turn", async () => {
+    // A model that never answers: the request only ends when its abort signal fires, as a real stalled connection does.
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise((_res, rej) => init.signal!.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "TimeoutError" })))));
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const pending = writeReply(args({ composed: composed({ intent: { choice: "analyze_contract", confidence: 0.9 } }) }));
+    const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(timeout).toHaveBeenCalledWith(60_000);
+    signal.dispatchEvent(new Event("abort")); // the deadline passes
+    const out = await pending;
+    expect(out.answer.source).toBe("template");
+    expect(out.answer.note).toMatch(/did not answer within 60s/);
+    timeout.mockRestore();
+  });
+
   it("retries on a model every account can call when the chosen one is not available, and says so", async () => {
     fetchMock.mockResolvedValueOnce(fail(404, "The model `gpt-9` does not exist")).mockResolvedValueOnce(ok("from the fallback", "gpt-4o-mini"));
     const out = await writeReply(args({ override: { apiKey: "k", model: "gpt-9" } }));

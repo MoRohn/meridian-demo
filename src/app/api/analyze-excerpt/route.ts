@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     const excerpt = text.slice(0, MAX_EXCERPT_CHARS);
     const questions = buildExcerptQuestions();
     const excerptState = buildExcerptState(excerpt);
-    const response = await systemOne(excerptState, questions, body.override);
+    const response = await systemOne(excerptState, questions, body.override, req.signal);
 
     const trace = Object.entries(response.answers).map(([questionId, answer]) => ({
       questionId,
@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
       risk: buildExcerptRisk(response.answers),
       complianceFlags: buildExcerptComplianceFlags(response.answers),
       source: response.source,
+      ...(response.fallbackReason ? { fallbackReason: response.fallbackReason } : {}),
       usage: response.usage,
       elapsedMs: response.elapsedMs,
       inputBytes: typesafeRequestBytes(excerptState, questions),

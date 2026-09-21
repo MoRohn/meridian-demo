@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
         if (typeof body.message !== "string" || !body.message.trim()) return apiError("message is required", 400);
         if (body.message.length > MAX_MESSAGE_CHARS) return apiError(`message is too long (max ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters)`, 413);
         const session = getOrCreateSession(body.sessionId);
-        const result = await handleTurn(session, body.message.trim(), body.typesafeOverride, body.openaiOverride);
+        const result = await handleTurn(session, body.message.trim(), body.typesafeOverride, body.openaiOverride, req.signal);
         return NextResponse.json({
           result,
           session: publicSession(session),

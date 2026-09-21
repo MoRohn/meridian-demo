@@ -128,3 +128,68 @@ def test_a_rejected_call_never_reaches_the_judge(monkeypatch):
     started = time.perf_counter()
     assert client.post("/evaluate", json=VALID).status_code == 401
     assert time.perf_counter() - started < 1.0
+
+
+# ---- admission control ----------------------------------------------------------------------------------------------------
+
+
+def _slots(monkeypatch, running: int, waiting: int):
+    """A fresh pool and slot count, so a test controls exactly how many judge calls may be in flight."""
+    import concurrent.futures
+    import threading
+
+    monkeypatch.setattr(main, "_judge_pool", concurrent.futures.ThreadPoolExecutor(max_workers=running))
+    monkeypatch.setattr(main, "_judge_slots", threading.BoundedSemaphore(running + waiting))
+    monkeypatch.setattr(main, "MAX_CONCURRENT_JUDGES", running)
+    monkeypatch.setattr(main, "MAX_QUEUED_JUDGES", waiting)
+
+
+def test_a_call_beyond_the_running_and_waiting_limit_is_refused_at_once(monkeypatch):
+    import concurrent.futures
+
+    _slots(monkeypatch, running=1, waiting=1)
+    monkeypatch.setattr(main, "JUDGE_TIMEOUT_S", 5)
+    FakeGEval.delay = 0.6
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as callers:
+        first = callers.submit(client.post, "/evaluate", json=VALID)  # takes the one running slot
+        time.sleep(0.1)
+        second = callers.submit(client.post, "/evaluate", json=VALID)  # takes the one waiting slot
+        time.sleep(0.1)
+        started = time.perf_counter()
+        refused = client.post("/evaluate", json=VALID)  # nothing left
+        assert refused.status_code == 429
+        assert "judge_busy" in refused.json()["detail"]
+        assert refused.headers["retry-after"] == str(main.BUSY_RETRY_AFTER_S)
+        assert time.perf_counter() - started < 0.3  # refused, not queued behind the others
+        assert first.result().status_code == 200
+        assert second.result().status_code == 200  # the ones admitted still finish
+
+
+def test_a_finished_call_gives_its_slot_back(monkeypatch):
+    _slots(monkeypatch, running=1, waiting=0)
+    for _ in range(3):
+        assert client.post("/evaluate", json=VALID).status_code == 200
+
+
+def test_a_call_that_times_out_keeps_its_slot_until_it_really_ends(monkeypatch):
+    _slots(monkeypatch, running=1, waiting=0)
+    monkeypatch.setattr(main, "JUDGE_TIMEOUT_S", 0.1)
+    FakeGEval.delay = 0.6
+    assert client.post("/evaluate", json=VALID).status_code == 504  # gave up waiting; the thread is still working
+    assert client.post("/evaluate", json=VALID).status_code == 429  # so there is no slot for another yet
+    time.sleep(0.7)  # the hung call ends and its slot is freed
+    FakeGEval.delay = 0.0
+    monkeypatch.setattr(main, "JUDGE_TIMEOUT_S", 5)
+    assert client.post("/evaluate", json=VALID).status_code == 200
+
+
+def test_a_refusal_is_counted_as_a_failure_with_its_own_code(monkeypatch):
+    _slots(monkeypatch, running=1, waiting=0)
+    monkeypatch.setattr(main, "JUDGE_TIMEOUT_S", 0.05)
+    FakeGEval.delay = 0.5
+    client.post("/evaluate", json=VALID)  # times out, still holding the slot
+    before = main._stats["evaluations_failed"]
+    assert client.post("/evaluate", json=VALID).status_code == 429
+    assert main._stats["evaluations_failed"] == before + 1
+    assert main._stats["last_error"] == "judge_busy"
+    time.sleep(0.6)

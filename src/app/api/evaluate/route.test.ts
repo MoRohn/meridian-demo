@@ -40,6 +40,14 @@ describe("POST /api/evaluate result mapping", () => {
     expect(result.judgeCostUsd).toBe(0.0012);
   });
 
+  it("shows a busy judge as a retryable failure with its own code, not as a judge that is not configured", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 429, json: async () => ({ detail: "G-Eval judge call failed (judge_busy): The evaluation service is handling as many judge calls as it allows. Try again in a few seconds." }) });
+    const POST = await load("http://localhost:8008");
+    const { outcome } = await (await post(POST, BODY)).json();
+    expect(outcome).toMatchObject({ ok: false, reason: "error", code: "judge_busy" });
+    expect(outcome.message).toMatch(/Try again in a few seconds/);
+  });
+
   it("defaults them for an older service that does not send them", async () => {
     const POST = await load("http://localhost:8008");
     const { result } = (await (await post(POST, BODY)).json()).outcome;

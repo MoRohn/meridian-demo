@@ -17,7 +17,8 @@ import { describeAnswer, openaiActivityResult, typesafeActivityResult, writerAct
 import type { TurnAnswer } from "@/lib/chat/answer";
 import type { ChatBackend } from "@/lib/chat/order";
 import { Workspace, type WorkspaceTab } from "@/components/Workspace";
-import { ReasoningTrace } from "@/components/ReasoningTrace";
+import { postJson, FAST_REQUEST_TIMEOUT_MS, SLOW_REQUEST_TIMEOUT_MS } from "@/lib/api/request";
+import { ReasoningTrace, type TurnJudgments } from "@/components/ReasoningTrace";
 import { RiskDashboard } from "@/components/RiskDashboard";
 import { ComplianceFlags } from "@/components/ComplianceFlags";
 import { CitationVerifier } from "@/components/CitationVerifier";
@@ -48,14 +49,19 @@ function newSessionId() {
     : `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-async function callApi(body: Record<string, unknown>) {
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error ?? `Request failed (${res.status})`);
-  return res.json();
+/** What /api/analyze-excerpt returns for a highlighted passage (the trace it also sends is not used here). */
+interface ExcerptAnalysis {
+  risk: CompositeRisk | null;
+  complianceFlags?: ComplianceFlag[];
+  source: "live" | "mock";
+  usage: { input_tokens: number; output_tokens: number };
+  elapsedMs: number;
+  inputBytes: number;
+}
+
+/** A chat action: a turn asks TypeSafe and then a model to write the reply, so it gets the long deadline. */
+function callApi(body: Record<string, unknown>) {
+  return postJson<any>("/api/chat", body, { timeoutMs: SLOW_REQUEST_TIMEOUT_MS }); // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 const emptyTotals: SessionTotals = {
@@ -86,7 +92,7 @@ export default function Home() {
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   const [traceSource, setTraceSource] = useState<"live" | "mock">("mock");
   /** The judgments the last chat reply was composed from (not scope-filtered), so the reply can be checked against them. */
-  const [lastJudgments, setLastJudgments] = useState<{ risk: CompositeRisk | null; flags: ComplianceFlag[] } | null>(null);
+  const [lastJudgments, setLastJudgments] = useState<TurnJudgments | null>(null);
   const [risk, setRisk] = useState<CompositeRisk | null>(null);
   const [complianceFlags, setComplianceFlags] = useState<ComplianceFlag[]>([]);
   /** Whatever chat message most recently produced the Trace tab's content — re-run by the Trace tab's retry button. */
@@ -265,6 +271,8 @@ export default function Home() {
           source: "live" | "mock";
           risk: CompositeRisk | null;
           complianceFlags: ComplianceFlag[];
+          blocked?: "privileged" | "injection" | null;
+          fallbackReason?: string;
           usage: { input_tokens: number; output_tokens: number };
           elapsedMs: number;
           context: ContextStats;
@@ -277,7 +285,7 @@ export default function Home() {
         setLastReply(result.reply);
         setTrace(result.trace);
         setTraceSource(result.source);
-        setLastJudgments({ risk: result.risk, flags: result.complianceFlags ?? [] });
+        setLastJudgments({ risk: result.risk, flags: result.complianceFlags ?? [], blocked: result.blocked ?? null, answer: result.answer ?? null, fallbackReason: result.fallbackReason ?? null });
         // A tab's own action button only ever touches that tab's state — the
         // Risk rerun never silently updates Compliance's flags and vice
         // versa, even though one fan-out call computes both under the hood.
@@ -322,16 +330,7 @@ export default function Home() {
     // A second, independent request: OpenAI's own findings for the same question, and the reply composed from them.
     const openaiPromise =
       openaiWillRun && oaEpoch != null
-        ? fetch("/api/compare-openai", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sessionId, message: text, override: oaOverride }),
-          })
-            .then(async (r) => {
-              const data = await r.json().catch(() => ({}));
-              if (!r.ok) throw new Error(data?.error ?? `Request failed (${r.status})`);
-              return data as { outcome: OpenAIRunOutcome; turn?: OpenAITurn | null };
-            })
+        ? postJson<{ outcome: OpenAIRunOutcome; turn?: OpenAITurn | null }>("/api/compare-openai", { sessionId, message: text, override: oaOverride }, { timeoutMs: SLOW_REQUEST_TIMEOUT_MS })
             .then((data) => {
               const doneAt = Date.now();
               const outcome = data.outcome;
@@ -410,14 +409,8 @@ export default function Home() {
     const tsEpoch = beginTypesafeActivity("excerpt", "Excerpt scan");
     const oaEpoch = openaiConfigured ? beginOpenaiActivity("excerpt", "Excerpt scan") : null;
 
-    const tsPromise = fetch("/api/analyze-excerpt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, override: tsOverride }),
-    })
-      .then((r) => r.json())
+    const tsPromise = postJson<ExcerptAnalysis>("/api/analyze-excerpt", { text, override: tsOverride }, { timeoutMs: FAST_REQUEST_TIMEOUT_MS })
       .then((data) => {
-        if (data.error) throw new Error(data.error);
         setExcerptRisk(data.risk);
         setExcerptSource(data.source === "live" ? "live" : "mock");
         setExcerptComplianceFlags(data.complianceFlags ?? []);
@@ -437,13 +430,8 @@ export default function Home() {
 
     const oaPromise =
       openaiConfigured && oaEpoch != null
-        ? fetch("/api/compare-openai-excerpt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text, override: oaOverride }),
-          })
-            .then((r) => r.json())
-            .then((data: { outcome: OpenAIRunOutcome }) => {
+        ? postJson<{ outcome: OpenAIRunOutcome }>("/api/compare-openai-excerpt", { text, override: oaOverride }, { timeoutMs: SLOW_REQUEST_TIMEOUT_MS })
+            .then((data) => {
               const outcome = data.outcome;
               setExcerptOaOutcome(outcome);
               if (outcome?.ok) {
@@ -732,6 +720,7 @@ export default function Home() {
                     documentText={activeDocument?.text}
                     judgments={lastJudgments}
                     openaiTurn={openaiTurn}
+                    hasDocument={Boolean(activeDocument)}
                   />
                 ),
                 risk: (

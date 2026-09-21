@@ -19,7 +19,7 @@ export interface ComplianceFlag {
  * logic and differ only where the backends' judgments differ.
  */
 export const INTENT_CONFIDENCE_FLOOR = 0.35;
-const CONTRACT_TYPE_CONFIDENCE_FLOOR = 0.4;
+export const CONTRACT_TYPE_CONFIDENCE_FLOOR = 0.4;
 /** A guardrail question at or above this probability blocks the turn. */
 export const GUARDRAIL_TRIGGER = 0.6;
 /** A compliance check at or above this probability is flagged. */

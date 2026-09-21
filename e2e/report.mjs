@@ -145,14 +145,23 @@ for (const [tab, activity] of [["Risk", "Risk score"], ["Compliance", "Complianc
   await page.waitForTimeout(2500);
   onScreen.push(...(await readEvaluations(activity)));
 
-  // Every results tab is drawn the same way: one comparison table (item, TypeSafe, OpenAI, match), then one evaluation table.
+  // Risk, Compliance and Citations are each drawn the same way: one comparison table (item, TypeSafe, OpenAI, match), then one evaluation table.
   const panel = page.getByRole("tabpanel");
   const headings = async (table) => (await table.locator("thead th").allInnerTexts()).map((t) => t.trim().toLowerCase());
-  const compare = await headings(panel.locator("table").first());
-  const firstColumn = { Risk: "rating", Compliance: "check", Citations: "check", Trace: "question" }[tab];
-  check(compare.join("|") === `${firstColumn}|typesafe|openai|match`, `${tab}: the results use the shared comparison table`, compare.join("|"));
+  if (tab === "Trace") {
+    // The Trace tab does not repeat the ratings and flags; it traces how each model got to them.
+    for (const name of ["What each model decided", "Decision path", "How sure each model was", "How each model worked"]) {
+      check((await panel.locator(`section[aria-label="${name}"]`).count()) === 1, `Trace: has a "${name}" section`);
+    }
+    check((await panel.locator('table[aria-label="Decision path"] thead th').allInnerTexts()).map((t) => t.trim().toLowerCase()).join("|") === "step|typesafe|openai", "Trace: the decision path compares the two models step by step");
+    check((await panel.getByText("Liability exposure").count()) === 0, "Trace: does not repeat the risk ratings shown on the Risk tab");
+  } else {
+    const compare = await headings(panel.locator("table").first());
+    const firstColumn = { Risk: "rating", Compliance: "check", Citations: "check" }[tab];
+    check(compare.join("|") === `${firstColumn}|typesafe|openai|match`, `${tab}: the results use the shared comparison table`, compare.join("|"));
+    check((await panel.locator("table").count()) === 2, `${tab}: exactly the comparison and the evaluation, no leftover card layout`, String(await panel.locator("table").count()));
+  }
   check((await headings(panel.locator('table[aria-label="Evaluation scores"]'))).join("|") === "model|score|result|total time|total cost", `${tab}: the evaluation uses the shared score table`);
-  check((await panel.locator("table").count()) === 2, `${tab}: exactly the comparison and the evaluation, no leftover card layout`, String(await panel.locator("table").count()));
 }
 check(!(await menuButton.isDisabled()), "Download report is enabled once models have run");
 const kindsJudged = new Set(evaluated.map((e) => e.kind));

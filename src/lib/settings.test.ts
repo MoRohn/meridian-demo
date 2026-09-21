@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   autoEvaluateEnabled,
   DEFAULT_JUDGE_MODEL,
@@ -10,6 +10,7 @@ import {
   JUDGE_OPTIONS,
   judgeOverride,
   loadSettings,
+  saveSettings,
   openaiOverride,
   typesafeOverride,
   type ApiKeySettings,
@@ -144,5 +145,81 @@ describe("describeJudge and the judge options", () => {
     for (const provider of ["openai", "anthropic", "gemini"] as const) {
       expect(JUDGE_MODELS[provider].map((m) => m.id)).toContain(DEFAULT_JUDGE_MODEL[provider]);
     }
+  });
+});
+
+/** A browser's two storage areas, as plain maps, so where a value was written can be checked. */
+function fakeBrowser(opts: { local?: Record<string, string>; session?: Record<string, string>; noSession?: boolean } = {}) {
+  const make = (init: Record<string, string> = {}) => {
+    const data = new Map(Object.entries(init));
+    return { data, getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v), removeItem: (k: string) => void data.delete(k) };
+  };
+  const local = make(opts.local);
+  const session = make(opts.session);
+  vi.stubGlobal("window", { localStorage: local, ...(opts.noSession ? {} : { sessionStorage: session }) });
+  return { local, session };
+}
+const SECRET = "sk-secret-000000000000000000";
+const withKeys = (over: Partial<ApiKeySettings> = {}): ApiKeySettings => ({ ...emptySettings, openaiApiKey: SECRET, typesafeApiKey: "ts-secret-000000000000000", judgeApiKey: "jd-secret-000000000000000", openaiModel: "gpt-4o", ...over });
+
+describe("where saved keys live", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps keys for this tab only by default: nothing secret reaches localStorage", () => {
+    const { local, session } = fakeBrowser();
+    saveSettings(withKeys());
+    expect(local.data.get("meridian.apiKeys")).not.toContain("secret");
+    expect(JSON.parse(session.data.get("meridian.apiKeys.session")!)).toEqual({ typesafeApiKey: "ts-secret-000000000000000", openaiApiKey: SECRET, judgeApiKey: "jd-secret-000000000000000" });
+  });
+
+  it("still remembers everything that is not a secret", () => {
+    const { local } = fakeBrowser();
+    saveSettings(withKeys({ autoEvaluate: false, judgeProvider: "anthropic", judgeModel: "claude-opus-5" }));
+    expect(JSON.parse(local.data.get("meridian.apiKeys")!)).toMatchObject({ openaiModel: "gpt-4o", autoEvaluate: false, judgeProvider: "anthropic", judgeModel: "claude-opus-5", rememberKeys: false });
+  });
+
+  it("loads the keys back in the same tab, and the preferences in a new one, without the keys", () => {
+    const first = fakeBrowser();
+    saveSettings(withKeys());
+    expect(loadSettings()).toMatchObject({ openaiApiKey: SECRET, typesafeApiKey: "ts-secret-000000000000000", rememberKeys: false });
+    // A new tab shares localStorage but not sessionStorage.
+    fakeBrowser({ local: Object.fromEntries(first.local.data) });
+    expect(loadSettings()).toMatchObject({ openaiApiKey: "", typesafeApiKey: "", judgeApiKey: "", openaiModel: "gpt-4o" });
+  });
+
+  it("keeps keys on the device only when asked, and then leaves nothing in the tab's storage", () => {
+    const { local, session } = fakeBrowser({ session: { "meridian.apiKeys.session": JSON.stringify({ openaiApiKey: "old" }) } });
+    saveSettings(withKeys({ rememberKeys: true }));
+    expect(JSON.parse(local.data.get("meridian.apiKeys")!)).toMatchObject({ openaiApiKey: SECRET, rememberKeys: true });
+    expect(session.data.has("meridian.apiKeys.session")).toBe(false);
+    expect(loadSettings()).toMatchObject({ openaiApiKey: SECRET, rememberKeys: true });
+  });
+
+  it("takes the keys off the device when a reader turns remembering off", () => {
+    const { local, session } = fakeBrowser();
+    saveSettings(withKeys({ rememberKeys: true }));
+    saveSettings(withKeys({ rememberKeys: false }));
+    expect(local.data.get("meridian.apiKeys")).not.toContain("secret");
+    expect(session.data.get("meridian.apiKeys.session")).toContain(SECRET);
+  });
+
+  it("leaves settings saved before this option on the device, so an upgrade never loses a key", () => {
+    fakeBrowser({ local: { "meridian.apiKeys": JSON.stringify({ typesafeApiKey: "", typesafeModel: "jev-latest", openaiApiKey: SECRET, openaiModel: "gpt-4o", autoEvaluate: true }) } });
+    expect(loadSettings()).toMatchObject({ openaiApiKey: SECRET, rememberKeys: true });
+  });
+
+  it("does not leave a stale tab key behind once every key is cleared", () => {
+    const { session } = fakeBrowser();
+    saveSettings(withKeys());
+    saveSettings({ ...emptySettings });
+    expect(session.data.has("meridian.apiKeys.session")).toBe(false);
+  });
+
+  it("copes with no sessionStorage or unreadable stored data, and never throws", () => {
+    fakeBrowser({ noSession: true });
+    expect(() => saveSettings(withKeys())).not.toThrow();
+    expect(loadSettings().openaiApiKey).toBe("");
+    fakeBrowser({ local: { "meridian.apiKeys": "{not json" }, session: { "meridian.apiKeys.session": "nope" } });
+    expect(loadSettings()).toEqual(emptySettings);
   });
 });
